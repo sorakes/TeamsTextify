@@ -1,0 +1,151 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  tenantId  String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  
+  meetings  Meeting[]
+  settings  OrgSettings?
+}
+
+model Meeting {
+  id              String   @id @default(cuid())
+  teamsId         String   @unique
+  organizationId  String
+  subject         String
+  startedAt       DateTime
+  endedAt         DateTime
+  durationMinutes Int      @default(0)
+  participants    String   // JSON string array of emails
+  
+  // Microsoft Graph Fields (Fase 14.1)
+  joinUrl         String?  // Necessário para buscar a Gravação (Video/Audio)
+  ownerId         String?  // MS Graph User ID do organizador
+
+  // Campos enriquecidos (Fase 8)
+  organizerEmail  String   @default("")
+  organizerName   String   @default("")
+  recipientsList  String   @default("[]")  // JSON: quem receberá a ata por e-mail
+  autoSendEnabled Boolean  @default(false) // Se a ata será enviada automaticamente
+  
+  status          String   @default("PENDING")
+  
+  transcriptRaw   String?
+  minutesText     String?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  knowledgeNode   KnowledgeNode?
+}
+
+model OrgSettings {
+  id               String   @id @default(cuid())
+  organizationId   String   @unique
+  
+  // Cofre de Motores (Multi-LLM Vault)
+  activeLlmProvider String   @default("openai")
+  llmConfigs        String   @default("{}") // JSON contendo { openai: {...}, groq: {...} }
+  
+  minutesTemplate  String?
+  monitoredTeams   String   @default("[]")
+  
+  organization     Organization @relation(fields: [organizationId], references: [id])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  level     String
+  source    String
+  message   String
+  meetingId String?
+  createdAt DateTime @default(now())
+}
+
+// ============================================================
+// CONFIGURAÇÕES GLOBAIS DO SISTEMA (Fase 9)
+// ============================================================
+
+model SystemSettings {
+  id                 String   @id @default("global") // Só teremos uma linha no banco com id="global"
+  entraTenantId      String?  
+  entraClientId      String?
+  entraClientSecret   String? // Salvo encriptado no banco
+  
+  // Regras de Compliance & Distribuição
+  ruleAutoSend           Boolean @default(false)
+  ruleBlockExternal      Boolean @default(true)
+  ruleMinDuration        Int     @default(5)
+  ruleMaxDuration        Int     @default(240)
+  ruleBccEmails          String  @default("[]") // JSON Array
+  ruleExcludedEmails     String  @default("[]") // JSON Array
+  ruleBlockedDomains     String  @default("[]") // JSON Array
+  ruleIgnoreKeywords     String  @default("[]") // JSON Array
+  ruleMandatoryTags      String  @default("[]") // JSON Array
+  ruleRestrictToOrgs     Boolean @default(false) // Manda apenas para o organizador
+  ruleObfuscateSensitive Boolean @default(true)  // Pede pro LLM ofuscar CPF/Cartões
+  ruleSummaryLanguage    String  @default("pt-BR")
+  
+  workerConcurrency      Int     @default(1)     // Quantos Workers paralelos vão rodar FFmpeg/Whisper
+  huggingFaceToken       String?                 // Token para o Pyannote (Speaker Diarization)
+
+  updatedAt          DateTime @updatedAt
+}
+
+// ============================================================
+// KNOWLEDGE GRAPH — Motor de Memória Corporativa (Obsidian-like)
+// ============================================================
+
+model KnowledgeNode {
+  id          String   @id @default(cuid())
+  meetingId   String   @unique
+  title       String                       // Assunto da reunião (= subject)
+  summary     String   @default("")        // Resumo condensado da ata
+  keywords    String   @default("[]")      // JSON array de palavras-chave extraídas pelo LLM
+  metadata    String   @default("{}")      // JSON flexível: duração, participantes, hora, etc.
+  createdAt   DateTime @default(now())
+  
+  meeting     Meeting  @relation(fields: [meetingId], references: [id])
+  tags        KnowledgeNodeTag[]
+  edgesFrom   KnowledgeEdge[] @relation("EdgeFrom")
+  edgesTo     KnowledgeEdge[] @relation("EdgeTo")
+}
+
+model KnowledgeEdge {
+  id          String   @id @default(cuid())
+  fromNodeId  String
+  toNodeId    String
+  weight      Float    @default(1.0)       // Força da conexão (quanto mais assuntos em comum, maior)
+  reason      String   @default("")        // Por que estão conectados (ex: "mesmo projeto", "mesmos participantes")
+  createdAt   DateTime @default(now())
+  
+  fromNode    KnowledgeNode @relation("EdgeFrom", fields: [fromNodeId], references: [id])
+  toNode      KnowledgeNode @relation("EdgeTo", fields: [toNodeId], references: [id])
+}
+
+model KnowledgeTag {
+  id    String @id @default(cuid())
+  name  String @unique       // Ex: "sprint", "marketing", "orçamento", "cliente-xyz"
+  color String @default("#3b82f6") // Cor do nó no grafo 3D
+  
+  nodes KnowledgeNodeTag[]
+}
+
+model KnowledgeNodeTag {
+  id     String @id @default(cuid())
+  nodeId String
+  tagId  String
+  
+  node   KnowledgeNode @relation(fields: [nodeId], references: [id])
+  tag    KnowledgeTag  @relation(fields: [tagId], references: [id])
+}

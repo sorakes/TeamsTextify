@@ -1,0 +1,9 @@
+node_modules
+.next
+.git
+.env
+.antigravity
+brain
+.gemini
+*.log
+docker-compose.yml
