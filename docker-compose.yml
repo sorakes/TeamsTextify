@@ -24,7 +24,7 @@ services:
     depends_on:
       - redis
     volumes:
-      - ./prisma/dev.db:/app/prisma/dev.db
+      - ./prisma:/app/prisma
     restart: unless-stopped
     deploy:
       resources:
