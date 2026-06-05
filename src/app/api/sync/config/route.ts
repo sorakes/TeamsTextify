@@ -20,8 +20,10 @@ export async function GET() {
       });
     }
 
+    const isConfigured = !!(config.entraTenantId && config.entraClientId && config.entraClientSecret);
+
     return NextResponse.json({
-      hasConfig: true,
+      hasConfig: isConfigured,
       tenantId: config.entraTenantId || "",
       clientId: config.entraClientId || "",
       hasSecret: !!config.entraClientSecret
