@@ -95,44 +95,75 @@ async function getRecordingContentUrl(graphClient: Client, meeting: any): Promis
   }
 
   // 2. FALLBACK: OneDrive / SharePoint (onde o arquivo real mora)
+  // O Teams salva gravações em: OneDrive > Documentos > Recordings
   console.log(`[Worker] Executando OneDrive Fallback para: "${subject}"...`);
+  
+  const cleanSubject = subject.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  // Helper interno: dado um array de itens de drive, tenta casar com o subject
+  const matchMp4 = (items: any[]): any | null => {
+    const mp4s = items.filter((f: any) => f.name?.toLowerCase().endsWith('.mp4'));
+    if (mp4s.length === 0) return null;
+    // Tenta match exato pelo nome da reunião
+    const exact = mp4s.find((m: any) => {
+      const cleanName = m.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+      return cleanSubject.length > 3 && cleanName.includes(cleanSubject);
+    });
+    return exact || null;
+  };
+
+  // 2a. Tenta o caminho direto Documents/Recordings (padrão do Teams)
+  try {
+    console.log(`[Worker] Tentando caminho direto: Documents/Recordings...`);
+    const directFiles = await graphClient
+      .api(`/users/${ownerId}/drive/root:/Documents/Recordings:/children`)
+      .select("id,name,@microsoft.graph.downloadUrl")
+      .get()
+      .catch(() => null);
+
+    if (directFiles?.value?.length > 0) {
+      const matched = matchMp4(directFiles.value);
+      if (matched) {
+        console.log(`[Worker] ✅ Gravação encontrada em Documents/Recordings: "${matched.name}"`);
+        if (matched["@microsoft.graph.downloadUrl"]) return matched["@microsoft.graph.downloadUrl"];
+        // Se não tiver downloadUrl direto, busca via item
+        const itemData = await graphClient
+          .api(`/users/${ownerId}/drive/items/${matched.id}`)
+          .select("@microsoft.graph.downloadUrl")
+          .get()
+          .catch(() => null);
+        if (itemData?.["@microsoft.graph.downloadUrl"]) return itemData["@microsoft.graph.downloadUrl"];
+      } else {
+        console.log(`[Worker] Pasta Documents/Recordings encontrada mas nenhum mp4 corresponde a "${subject}".`);
+      }
+    }
+  } catch (errDirect) {
+    console.log(`[Worker] Caminho direto Documents/Recordings não disponível, tentando varredura genérica...`);
+  }
+
+  // 2b. Fallback genérico: varre a raiz em busca de pasta Recordings
   try {
     const rDrive = await graphClient.api(`/users/${ownerId}/drive/root/children`).get().catch(() => null);
-    if (rDrive && rDrive.value) {
+    if (rDrive?.value) {
       const folders = rDrive.value.filter((f: any) => f.folder);
-      const recFolder = folders.find((f: any) => 
-        f.name.toLowerCase().includes('recording') || 
+      const recFolder = folders.find((f: any) =>
+        f.name.toLowerCase().includes('recording') ||
         f.name.toLowerCase().includes('grava')
       );
-      
+
       if (recFolder) {
         const rFiles = await graphClient.api(`/users/${ownerId}/drive/items/${recFolder.id}/children`).get().catch(() => null);
-        if (rFiles && rFiles.value && rFiles.value.length > 0) {
-          const mp4s = rFiles.value.filter((f: any) => f.name.endsWith('.mp4'));
-          if (mp4s.length > 0) {
-            // Tenta encontrar o arquivo pelo nome da reunião (ignorando pontuações e espaços longos)
-            const cleanSubject = subject.toLowerCase().replace(/[^a-z0-9]/g, '');
-            let matchedFile = mp4s.find((m: any) => {
-               const cleanName = m.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-               return cleanSubject.length > 3 && cleanName.includes(cleanSubject);
-            });
-            
-            // Se não encontrar uma gravação com nome parecido, lança erro
-            if (!matchedFile) {
-              throw new Error(`Nenhuma gravação encontrada no OneDrive que corresponda a "${subject}".`);
-            } else {
-              console.log(`[Worker] Gravação exata encontrada no OneDrive: "${matchedFile.name}"`);
-            }
-            
-            if (matchedFile["@microsoft.graph.downloadUrl"]) {
-               return matchedFile["@microsoft.graph.downloadUrl"];
-            }
+        if (rFiles?.value) {
+          const matched = matchMp4(rFiles.value);
+          if (matched) {
+            console.log(`[Worker] ✅ Gravação encontrada na raiz do OneDrive: "${matched.name}"`);
+            if (matched["@microsoft.graph.downloadUrl"]) return matched["@microsoft.graph.downloadUrl"];
           }
         }
       }
     }
   } catch (errFallback) {
-    console.log(`[Worker] Erro no Fallback do OneDrive:`, errFallback);
+    console.log(`[Worker] Erro no Fallback genérico do OneDrive:`, errFallback);
   }
 
   throw new Error("Nenhuma gravação encontrada via API oficial e o Fallback do OneDrive também retornou vazio. A reunião provavelmente não foi gravada.");
