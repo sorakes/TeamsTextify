@@ -6,6 +6,7 @@ const connection = new Redis({
   host: process.env.REDIS_HOST || "127.0.0.1",
   port: parseInt(process.env.REDIS_PORT || "6379"),
   maxRetriesPerRequest: null,
+  lazyConnect: true,
 });
 
 // A fila que cuidará da Sincronização de Transcrições

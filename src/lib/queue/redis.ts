@@ -2,8 +2,9 @@ import { Queue } from 'bullmq';
 
 // Conexão interna para o Redis que roda no mesmo container (via supervisord)
 const connection = {
-  host: 'localhost',
-  port: 6379,
+  host: process.env.REDIS_HOST || '127.0.0.1',
+  port: parseInt(process.env.REDIS_PORT || "6379"),
+  lazyConnect: true,
 };
 
 // Instância da Fila. O Python Worker está escutando este mesmo nome.
