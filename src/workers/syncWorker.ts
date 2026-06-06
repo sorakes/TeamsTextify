@@ -64,11 +64,11 @@ async function getGraphClient(): Promise<Client> {
 
 // ── Helper: buscar URL real da gravação via MS Graph (OneDrive First) ─────────
 async function getRecordingContentUrl(graphClient: Client, meeting: any): Promise<string> {
-  const joinUrl = meeting.joinUrl; // Agora guarda a rota do Graph: /users/{userId}/drive/items/{itemId}
+  const apiPath = `/users/${meeting.ownerId}/drive/items/${meeting.teamsId}`;
   
   try {
     const itemData = await graphClient
-      .api(joinUrl)
+      .api(apiPath)
       .select("@microsoft.graph.downloadUrl")
       .get();
       
