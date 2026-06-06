@@ -147,11 +147,19 @@ export async function POST(request: Request) {
                       
                     if (permissionsResponse?.value) {
                       permissionsResponse.value.forEach((perm: any) => {
-                        // Permissão pode ter grantedTo ou grantedToV2
+                        // Permissão individual
                         const grantedTo = perm.grantedToV2 || perm.grantedTo;
                         if (grantedTo?.user?.email) {
                           participantsArr.push(grantedTo.user.email);
                         }
+                        
+                        // Permissão em lote (lista de identidades)
+                        const identities = perm.grantedToIdentitiesV2 || perm.grantedToIdentities || [];
+                        identities.forEach((identity: any) => {
+                          if (identity?.user?.email) {
+                            participantsArr.push(identity.user.email);
+                          }
+                        });
                       });
                     }
                   } catch (err) {
