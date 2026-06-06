@@ -114,7 +114,7 @@ export async function POST(request: Request) {
 
               const driveItemsResponse = await client
                 .api(`/users/${user.id}/drive/${path}`)
-                .select("id,name,createdDateTime,lastModifiedDateTime,file,audio,video")
+                .select("id,name,createdDateTime,lastModifiedDateTime,file,audio,video,webUrl")
                 .get()
                 .catch(() => null);
 
@@ -130,6 +130,37 @@ export async function POST(request: Request) {
                   const existing = await prisma.meeting.findUnique({ where: { teamsId: mp4.id } });
                   if (existing) { totalDuplicates++; continue; }
 
+                  // 1. Duração: Microsoft Graph retorna em milissegundos
+                  let durationMinutes = 0;
+                  if (mp4.video?.duration) {
+                    durationMinutes = Math.round(mp4.video.duration / 60000);
+                  } else if (mp4.audio?.duration) {
+                    durationMinutes = Math.round(mp4.audio.duration / 60000);
+                  }
+
+                  // 2. Participantes: Extrair das permissões de compartilhamento
+                  let participantsArr: string[] = [];
+                  try {
+                    const permissionsResponse = await client
+                      .api(`/users/${user.id}/drive/items/${mp4.id}/permissions`)
+                      .get();
+                      
+                    if (permissionsResponse?.value) {
+                      permissionsResponse.value.forEach((perm: any) => {
+                        // Permissão pode ter grantedTo ou grantedToV2
+                        const grantedTo = perm.grantedToV2 || perm.grantedTo;
+                        if (grantedTo?.user?.email) {
+                          participantsArr.push(grantedTo.user.email);
+                        }
+                      });
+                    }
+                  } catch (err) {
+                    console.error("Erro ao buscar permissões do item:", err);
+                  }
+                  
+                  // Deduplicar e limpar lista de participantes
+                  participantsArr = [...new Set(participantsArr.filter(Boolean))];
+
                   const newMeeting = await prisma.meeting.create({
                     data: {
                       teamsId: mp4.id,
@@ -137,10 +168,11 @@ export async function POST(request: Request) {
                       subject: mp4.name?.replace(".mp4", "") || "Gravação Sem Título",
                       startedAt: new Date(fileDate),
                       endedAt: new Date(fileDate),
-                      participants: JSON.stringify([]),
+                      durationMinutes: durationMinutes,
+                      participants: JSON.stringify(participantsArr),
                       organizerEmail: email,
                       organizerName: user.displayName || "Desconhecido",
-                      joinUrl: `/users/${user.id}/drive/items/${mp4.id}`,
+                      joinUrl: mp4.webUrl || `/users/${user.id}/drive/items/${mp4.id}`,
                       ownerId: user.id || null,
                       status: "PENDING",
                     },
