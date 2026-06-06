@@ -116,14 +116,28 @@ function extractAudio(videoPath: string, audioPath: string): Promise<void> {
 // ── Helper: diarização com Python (Whisper + Pyannote) ───────────────────────
 function runDiarization(audioPath: string, hfToken: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const py = spawn("/opt/venv/bin/python3", ["/app/src/python/diarize.py", audioPath, hfToken]);
+    const py = spawn("/opt/venv/bin/python3", ["/app/src/python/diarize.py", audioPath, hfToken], {
+      env: { ...process.env, PYTHONIOENCODING: "utf-8" }
+    });
     let stdout = "";
     let stderr = "";
-    py.stdout.on("data", (d) => { stdout += d.toString(); });
-    py.stderr.on("data", (d) => { stderr += d.toString(); });
+    py.stdout.on("data", (d) => { stdout += d.toString("utf8"); });
+    py.stderr.on("data", (d) => { stderr += d.toString("utf8"); });
     py.on("close", (code) => {
-      if (code === 0 && stdout.trim()) resolve(stdout.trim());
-      else reject(new Error(`Diarização Python falhou (código ${code}): ${stderr.slice(-300)}`));
+      if (code === 0 && stdout.trim()) {
+        try {
+          const parsed = JSON.parse(stdout.trim());
+          if (parsed.success && parsed.raw_text) {
+            resolve(parsed.raw_text);
+          } else {
+            resolve(stdout.trim());
+          }
+        } catch (e) {
+          resolve(stdout.trim());
+        }
+      } else {
+        reject(new Error(`Diarização Python falhou (código ${code}): ${stderr.slice(-300)}`));
+      }
     });
   });
 }
