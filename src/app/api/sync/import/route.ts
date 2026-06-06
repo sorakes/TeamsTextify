@@ -100,41 +100,55 @@ export async function POST(request: Request) {
           });
 
           try {
-            const eventsResponse = await client
-              .api(`/users/${user.id}/events`)
-              .filter(`start/dateTime ge '${dateFilter}'`)
-              .select("id,iCalUId,subject,start,end,attendees,organizer,isOnlineMeeting,onlineMeeting")
-              .orderby("start/dateTime desc")
-              .top(50)
-              .get();
+            const possiblePaths = [
+              "root:/Documents/Recordings:/children",
+              "root:/Documentos/Recordings:/children",
+              "root:/Recordings:/children",
+              "root:/Gravações:/children"
+            ];
 
-            const events = eventsResponse.value || [];
+            let foundRecordingsFolder = false;
 
-            for (const ev of events) {
-              if (!ev.isOnlineMeeting) continue;
+            for (const path of possiblePaths) {
+              if (foundRecordingsFolder) break;
 
-              const globalMeetingId = ev.iCalUId || ev.id;
-              const existing = await prisma.meeting.findUnique({ where: { teamsId: globalMeetingId } });
-              if (existing) { totalDuplicates++; continue; }
+              const driveItemsResponse = await client
+                .api(`/users/${user.id}/drive/${path}`)
+                .select("id,name,createdDateTime,lastModifiedDateTime,file,audio,video")
+                .get()
+                .catch(() => null);
 
-              const participants = ev.attendees?.map((a: any) => a.emailAddress?.address).filter(Boolean) || [];
-              const newMeeting = await prisma.meeting.create({
-                data: {
-                  teamsId: globalMeetingId,
-                  organizationId: org.id,
-                  subject: ev.subject || "Reunião Sem Título",
-                  startedAt: ev.start?.dateTime ? new Date(ev.start.dateTime) : new Date(),
-                  endedAt: ev.end?.dateTime ? new Date(ev.end.dateTime) : new Date(),
-                  participants: JSON.stringify(participants),
-                  organizerEmail: ev.organizer?.emailAddress?.address || email,
-                  organizerName: ev.organizer?.emailAddress?.name || user.displayName || "Desconhecido",
-                  joinUrl: ev.onlineMeeting?.joinUrl || null,
-                  ownerId: user.id || null,
-                  status: "PENDING",
-                },
-              });
-              await addSyncJob(newMeeting.id);
-              totalImported++;
+              if (driveItemsResponse?.value) {
+                foundRecordingsFolder = true; // Achou a pasta certa, não precisa testar outras
+
+                const mp4s = driveItemsResponse.value.filter((i: any) => i.name?.toLowerCase().endsWith(".mp4"));
+
+                for (const mp4 of mp4s) {
+                  const fileDate = mp4.createdDateTime || mp4.lastModifiedDateTime;
+                  if (!fileDate || new Date(fileDate) < dateLimit) continue;
+
+                  const existing = await prisma.meeting.findUnique({ where: { teamsId: mp4.id } });
+                  if (existing) { totalDuplicates++; continue; }
+
+                  const newMeeting = await prisma.meeting.create({
+                    data: {
+                      teamsId: mp4.id,
+                      organizationId: org.id,
+                      subject: mp4.name?.replace(".mp4", "") || "Gravação Sem Título",
+                      startedAt: new Date(fileDate),
+                      endedAt: new Date(fileDate),
+                      participants: JSON.stringify([]),
+                      organizerEmail: email,
+                      organizerName: user.displayName || "Desconhecido",
+                      joinUrl: `/users/${user.id}/drive/items/${mp4.id}`,
+                      ownerId: user.id || null,
+                      status: "PENDING",
+                    },
+                  });
+                  await addSyncJob(newMeeting.id);
+                  totalImported++;
+                }
+              }
             }
           } catch {
             // conta sem mailbox, ignora

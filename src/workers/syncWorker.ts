@@ -62,128 +62,24 @@ async function getGraphClient(): Promise<Client> {
   });
 }
 
-// ── Helper: buscar URL real da gravação via MS Graph (com Fallback) ─────────
+// ── Helper: buscar URL real da gravação via MS Graph (OneDrive First) ─────────
 async function getRecordingContentUrl(graphClient: Client, meeting: any): Promise<string> {
-  const joinUrl = meeting.joinUrl;
-  const ownerId = meeting.ownerId;
-  const subject = meeting.subject || "";
-
-  // 1. Tentar via API oficial do Microsoft Teams (onlineMeetings)
-  try {
-    const meetingResponse = await graphClient
-      .api(`/users/${ownerId}/onlineMeetings?$filter=joinWebUrl eq '${joinUrl}'`)
-      .get();
-
-    const onlineMeeting = meetingResponse?.value?.[0];
-    if (onlineMeeting) {
-      const recordingsResponse = await graphClient
-        .api(`/users/${ownerId}/onlineMeetings/${onlineMeeting.id}/recordings`)
-        .get().catch(() => ({ value: [] }));
-
-      const recordings = recordingsResponse?.value || [];
-      if (recordings.length > 0) {
-        const recording = recordings[0];
-        const contentResponse = await graphClient
-          .api(`/users/${ownerId}/onlineMeetings/${onlineMeeting.id}/recordings/${recording.id}/content`)
-          .get().catch(() => null);
-        const downloadUrl = recording.contentUrl || contentResponse?.["@odata.downloadUrl"];
-        if (downloadUrl) return downloadUrl;
-      }
-    }
-  } catch (e: any) {
-    console.log(`[Worker] Falha na API oficial, tentando OneDrive Fallback...`);
-  }
-
-  // 2. FALLBACK: OneDrive / SharePoint (onde o arquivo real mora)
-  // O Teams salva a gravação no OneDrive da pessoa que APERTOU O BOTÃO DE GRAVAR.
-  // Nem sempre é o organizador. Então vamos buscar no OneDrive de todos os participantes.
-  console.log(`[Worker] Executando OneDrive Fallback para: "${subject}"...`);
+  const joinUrl = meeting.joinUrl; // Agora guarda a rota do Graph: /users/{userId}/drive/items/{itemId}
   
-  const cleanSubject = subject.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-  // Helper interno: dado um array de itens de drive, tenta casar com o subject
-  const matchMp4 = (items: any[]): any | null => {
-    const mp4s = items.filter((f: any) => f.name?.toLowerCase().endsWith('.mp4'));
-    if (mp4s.length === 0) return null;
-    // Tenta match exato pelo nome da reunião
-    const exact = mp4s.find((m: any) => {
-      const cleanName = m.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-      return cleanSubject.length > 3 && cleanName.includes(cleanSubject);
-    });
-    return exact || null;
-  };
-
-  // Monta a lista de possíveis donos da gravação (Organizador + Participantes)
-  let participants: string[] = [];
-  try { participants = JSON.parse(meeting.participants || "[]"); } catch {}
-  const candidateUsers = [...new Set([ownerId, meeting.organizerEmail, ...participants].filter(Boolean))];
-
-  // Possíveis caminhos da pasta de gravações (varia por idioma do OneDrive)
-  const possiblePaths = [
-    "root:/Documents/Recordings:/children",
-    "root:/Documentos/Recordings:/children",
-    "root:/Recordings:/children"
-  ];
-
-  for (const userId of candidateUsers) {
-    console.log(`[Worker] Buscando gravação no drive de: ${userId}`);
-    
-    // Tenta os caminhos diretos primeiro
-    for (const folderPath of possiblePaths) {
-      try {
-        const directFiles = await graphClient
-          .api(`/users/${userId}/drive/${folderPath}`)
-          .select("id,name,@microsoft.graph.downloadUrl")
-          .get()
-          .catch(() => null);
-
-        if (directFiles?.value?.length > 0) {
-          const matched = matchMp4(directFiles.value);
-          if (matched) {
-            console.log(`[Worker] ✅ Gravação encontrada no OneDrive de ${userId} em ${folderPath}: "${matched.name}"`);
-            if (matched["@microsoft.graph.downloadUrl"]) return matched["@microsoft.graph.downloadUrl"];
-            
-            // Se não tiver downloadUrl direto, busca via item
-            const itemData = await graphClient
-              .api(`/users/${userId}/drive/items/${matched.id}`)
-              .select("@microsoft.graph.downloadUrl")
-              .get()
-              .catch(() => null);
-            if (itemData?.["@microsoft.graph.downloadUrl"]) return itemData["@microsoft.graph.downloadUrl"];
-          }
-        }
-      } catch (err) {
-        // Ignora erro de pasta não encontrada e tenta a próxima
-      }
+  try {
+    const itemData = await graphClient
+      .api(joinUrl)
+      .select("@microsoft.graph.downloadUrl")
+      .get();
+      
+    if (itemData?.["@microsoft.graph.downloadUrl"]) {
+      return itemData["@microsoft.graph.downloadUrl"];
     }
-
-    // Se os caminhos diretos falharem, tenta a varredura genérica na raiz deste usuário
-    try {
-      const rDrive = await graphClient.api(`/users/${userId}/drive/root/children`).get().catch(() => null);
-      if (rDrive?.value) {
-        const folders = rDrive.value.filter((f: any) => f.folder);
-        const recFolder = folders.find((f: any) =>
-          f.name.toLowerCase().includes('recording') ||
-          f.name.toLowerCase().includes('grava')
-        );
-
-        if (recFolder) {
-          const rFiles = await graphClient.api(`/users/${userId}/drive/items/${recFolder.id}/children`).get().catch(() => null);
-          if (rFiles?.value) {
-            const matched = matchMp4(rFiles.value);
-            if (matched) {
-              console.log(`[Worker] ✅ Gravação encontrada na raiz do OneDrive de ${userId}: "${matched.name}"`);
-              if (matched["@microsoft.graph.downloadUrl"]) return matched["@microsoft.graph.downloadUrl"];
-            }
-          }
-        }
-      }
-    } catch (errFallback) {
-      // Ignora erro
-    }
+  } catch (err: any) {
+    throw new Error(`Falha ao acessar o arquivo MP4 no OneDrive: ${err.message}`);
   }
-
-  throw new Error("Nenhuma gravação encontrada via API oficial e o Fallback do OneDrive também retornou vazio. A reunião provavelmente não foi gravada.");
+  
+  throw new Error("Arquivo não possui URL de download (provavelmente foi deletado).");
 }
 
 // ── Helper: download de arquivo com token Bearer ──────────────────────────────
