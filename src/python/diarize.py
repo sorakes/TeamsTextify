@@ -6,7 +6,7 @@ from pyannote.audio import Pipeline
 
 def main():
     if len(sys.argv) < 2:
-        print(json.dumps({"error": "Caminho do arquivo de áudio não fornecido."}))
+        print(json.dumps({"error": "Caminho do arquivo de áudio não fornecido."}, ensure_ascii=False))
         sys.exit(1)
 
     audio_path = sys.argv[1]
@@ -83,10 +83,10 @@ def main():
             "raw_text": "\n".join(final_text),
             "segments": diarization_results
         }
-        print(json.dumps(output))
+        print(json.dumps(output, ensure_ascii=False))
 
     except Exception as e:
-        print(json.dumps({"error": str(e)}))
+        print(json.dumps({"error": str(e)}, ensure_ascii=False))
         sys.exit(1)
 
 if __name__ == "__main__":

@@ -283,10 +283,15 @@ ${transcriptRaw}`,
 
       // ── 9. Criar KnowledgeNode no MemoryBrain ───────────────────────────────
       try {
+        const existingTagsForPrompt = await prisma.knowledgeTag.findMany({ select: { name: true } });
+        const existingTagsList = existingTagsForPrompt.map(t => t.name).join(", ");
+        
         const { text: metaText } = await generateText({
           model: aiModel,
           prompt: `Dado o texto de Ata abaixo, responda APENAS com JSON válido:
 {"summary": "<resumo em 1 frase>", "keywords": ["kw1","kw2","kw3","kw4","kw5"]}
+
+ATENÇÃO: Você DEVE analisar as seguintes tags já existentes no sistema e reutilizá-las no array "keywords" se o assunto for correspondente: [${existingTagsList}]. Se nenhum assunto bater com as tags existentes, crie novas.
 
 Ata:
 ${finalMinutes.substring(0, 2000)}`,
