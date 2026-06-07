@@ -371,15 +371,16 @@ ${transcriptRaw}`,
       
       const { object: parsed } = await generateObject({
         model: aiModel,
+        maxRetries: 0,
         schema: z.object({
           summary: z.string().describe("Resumo executivo da reunião em 1 frase."),
           tagCliente: z.string().describe("Nome do Cliente ou Empresa principal abordado na reunião. (Ex: VW, MBB, Interno)"),
           tagAssunto: z.string().describe("O assunto principal ou macro-categoria da reunião. (Ex: Planejamento, Debriefing)"),
           kwCliente: z.string().describe("Nome do Cliente abordado"),
           kwAssunto1: z.string().describe("Assunto principal 1"),
-          kwAssunto2: z.string().describe("Assunto principal 2"),
-          kwAbordado1: z.string().describe("Detalhe técnico abordado 1"),
-          kwAbordado2: z.string().describe("Detalhe técnico abordado 2"),
+          kwAssunto2: z.string().optional().describe("Assunto principal 2 (opcional)"),
+          kwAbordado1: z.string().optional().describe("Detalhe técnico abordado 1 (opcional)"),
+          kwAbordado2: z.string().optional().describe("Detalhe técnico abordado 2 (opcional)"),
         }),
         prompt: `Extraia o contexto de negócios desta Ata. Ignore cabeçalhos genéricos (data, hora, participantes). Foco estrito em quem é o Cliente e quais os assuntos e decisões:\n\n${finalMinutes.substring(0, 2000)}`,
       });
