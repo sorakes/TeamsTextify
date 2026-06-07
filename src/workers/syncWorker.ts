@@ -398,10 +398,10 @@ ${transcriptRaw}`,
         }),
         prompt: `O Título da reunião é: "${meeting.subject}".
 Extraia o contexto de negócios respeitando as seguintes REGRAS RÍGIDAS:
-1. Cliente: NUNCA use siglas. Identifique o cliente na Ata e escreva sempre o seu nome OFICIAL completo.
+1. Cliente: NUNCA use siglas. Identifique o cliente na Ata. SE JÁ EXISTIR NA LISTA DE TAGS uma variação desse cliente, COPIE EXATAMENTE o nome que está na lista. Não crie uma nova variação.
 2. Assunto: MÁXIMO de 2 palavras. Retorne apenas uma categoria macro. NÃO use vírgulas.
 3. Keywords: Não repita palavras. Seja muito conciso (1 a 3 palavras por keyword).
-4. Tags existentes: Reutilize estas se fizer sentido: [${existingTagsList}].
+4. Tags existentes (OBRIGATÓRIO USAR SE HOUVER MATCH SEMÂNTICO): [${existingTagsList}].
 
 Ata:
 ${finalMinutes.substring(0, 2000)}`,
@@ -433,13 +433,22 @@ ${finalMinutes.substring(0, 2000)}`,
       for (const t of tags) {
         if (!t) continue;
         const tagName = t; // Mantém a formatação legível (ex: "Volkswagen")
-        let tagToUse = existingTags.find(ext => ext.name.toLowerCase() === tagName.toLowerCase());
+        
+        // 🧠 Auto-Merge / Fuzzy Matching para evitar fragmentação ("VW" vs "Volkswagen do Brasil")
+        let tagToUse = existingTags.find(ext => {
+          const e = ext.name.toLowerCase();
+          const n = tagName.toLowerCase();
+          return e === n || (e.includes(n) && n.length > 4) || (n.includes(e) && e.length > 4);
+        });
+
         if (!tagToUse) {
           tagToUse = await prisma.knowledgeTag.upsert({
             where: { name: tagName },
             update: {},
             create: { name: tagName, color: `hsl(${Math.floor(Math.random() * 360)}, 70%, 50%)` }
           });
+          // Adiciona a nova tag em memória para os próximos loops caso o array de rawTags repita algo semântico
+          existingTags.push({ id: tagToUse.id, name: tagToUse.name });
         }
         const existingTagRel = await prisma.knowledgeNodeTag.findFirst({
           where: { nodeId: node.id, tagId: tagToUse.id }
