@@ -374,21 +374,24 @@ ${transcriptRaw}`,
         maxRetries: 0,
         schema: z.object({
           summary: z.string().describe("Resumo executivo da reunião em 1 frase."),
-          tagCliente: z.string().describe("NOME do Cliente. SEMPRE expanda siglas para o nome oficial completo (Ex: VW vira Volkswagen, MBB vira Mercedes-Benz). Se não achar, use 'Interno'."),
+          tagCliente: z.string().describe("NOME do Cliente. PROIBIDO USAR SIGLAS. Escreva o nome completo oficial (Ex: Volkswagen, Mercedes-Benz)."),
           tagAssunto: z.string().describe("Categoria macro (Ex: Planejamento, Debriefing). Apenas 1 a 2 palavras."),
-          kwCliente: z.string().describe("Nome do Cliente abordado. SEMPRE use o nome oficial completo (ex: Volkswagen)."),
-          kwAssunto1: z.string().describe("Assunto principal curto (1 a 3 palavras)."),
-          kwAssunto2: z.string().optional().describe("Assunto principal 2 curto (1 a 3 palavras)."),
-          kwAbordado1: z.string().optional().describe("Detalhe técnico curto (1 a 3 palavras)."),
-          kwAbordado2: z.string().optional().describe("Detalhe técnico 2 curto (1 a 3 palavras)."),
+          kwCliente: z.string().describe("Nome do Cliente abordado. PROIBIDO SIGLAS. Nome completo oficial."),
+          kwAssunto1: z.string().describe("Assunto principal curto (1 a 3 palavras). NÃO REPITA PALAVRAS."),
+          kwAssunto2: z.string().optional().describe("Assunto principal 2 curto (1 a 3 palavras). Diferente do Assunto 1."),
+          kwAbordado1: z.string().optional().describe("Detalhe técnico curto. Diferente dos anteriores."),
+          kwAbordado2: z.string().optional().describe("Detalhe técnico 2 curto. Diferente dos anteriores."),
         }),
-        prompt: `O Título da reunião é: "${meeting.subject}".\nExtraia o contexto de negócios. O Cliente geralmente está no Título (ex: VW, MBB, Volks, Bradesco). Foque em nomes reais e palavras-chave curtas. Ignore cabeçalhos genéricos.\nTags já existentes no sistema (use se fizer sentido, mas não é obrigatório): [${existingTagsList}].\n\nAta:\n${finalMinutes.substring(0, 2000)}`,
+        prompt: `O Título da reunião é: "${meeting.subject}".\nExtraia o contexto de negócios. O Cliente geralmente está no Título (ex: VW, MBB, Volks, Bradesco). Foque em nomes reais e palavras-chave curtas. Ignore cabeçalhos genéricos.\nNÃO GERE PALAVRAS REPETIDAS.\nTags já existentes no sistema (use se fizer sentido, mas não é obrigatório): [${existingTagsList}].\n\nAta:\n${finalMinutes.substring(0, 2000)}`,
       });
       const summary: string = parsed.summary || meeting.subject;
       
       const sanitizeKw = (str?: string) => str ? str.substring(0, 30).trim() : "";
-      const tags: string[] = [sanitizeKw(parsed.tagCliente), sanitizeKw(parsed.tagAssunto)].filter(Boolean) as string[];
-      const keywords: string[] = [sanitizeKw(parsed.kwCliente), sanitizeKw(parsed.kwAssunto1), sanitizeKw(parsed.kwAssunto2), sanitizeKw(parsed.kwAbordado1), sanitizeKw(parsed.kwAbordado2)].filter(Boolean) as string[];
+      const rawTags = [sanitizeKw(parsed.tagCliente), sanitizeKw(parsed.tagAssunto)].filter(Boolean) as string[];
+      const tags: string[] = rawTags.filter((v, i, a) => a.findIndex(t => t.toLowerCase() === v.toLowerCase()) === i);
+
+      const rawKw = [sanitizeKw(parsed.kwCliente), sanitizeKw(parsed.kwAssunto1), sanitizeKw(parsed.kwAssunto2), sanitizeKw(parsed.kwAbordado1), sanitizeKw(parsed.kwAbordado2)].filter(Boolean) as string[];
+      const keywords: string[] = rawKw.filter((v, i, a) => a.findIndex(t => t.toLowerCase() === v.toLowerCase()) === i);
 
       // A LLM decide as tags — busca tags existentes para reutilizar ou cria nova
       const existingTags = await prisma.knowledgeTag.findMany({ select: { id: true, name: true } });
@@ -407,8 +410,8 @@ ${transcriptRaw}`,
 
       for (const t of tags) {
         if (!t) continue;
-        const tagName = t.toLowerCase().replace(/\s+/g, "-");
-        let tagToUse = existingTags.find(ext => ext.name.toLowerCase() === tagName);
+        const tagName = t; // Mantém a formatação legível (ex: "Volkswagen")
+        let tagToUse = existingTags.find(ext => ext.name.toLowerCase() === tagName.toLowerCase());
         if (!tagToUse) {
           tagToUse = await prisma.knowledgeTag.upsert({
             where: { name: tagName },
