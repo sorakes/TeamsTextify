@@ -382,7 +382,7 @@ ${transcriptRaw}`,
           kwAbordado1: z.string().optional().describe("Detalhe técnico curto (1 a 3 palavras)."),
           kwAbordado2: z.string().optional().describe("Detalhe técnico 2 curto (1 a 3 palavras)."),
         }),
-        prompt: `O Título da reunião é: "${meeting.subject}".\nExtraia o contexto de negócios. O Cliente geralmente está no Título (ex: VW, MBB, Volks, Bradesco). Foque em nomes reais e palavras-chave curtas. Ignore cabeçalhos genéricos.\n\nAta:\n${finalMinutes.substring(0, 2000)}`,
+        prompt: `O Título da reunião é: "${meeting.subject}".\nExtraia o contexto de negócios. O Cliente geralmente está no Título (ex: VW, MBB, Volks, Bradesco). Foque em nomes reais e palavras-chave curtas. Ignore cabeçalhos genéricos.\nTags já existentes no sistema (use se fizer sentido, mas não é obrigatório): [${existingTagsList}].\n\nAta:\n${finalMinutes.substring(0, 2000)}`,
       });
       const summary: string = parsed.summary || meeting.subject;
       
