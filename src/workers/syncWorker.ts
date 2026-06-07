@@ -374,19 +374,27 @@ ${transcriptRaw}`,
         maxRetries: 0,
         schema: z.object({
           summary: z.string().describe("Resumo executivo da reunião em 1 frase."),
-          tagCliente: z.string().describe("NOME do Cliente. PROIBIDO USAR SIGLAS. Escreva o nome completo oficial (Ex: Volkswagen, Mercedes-Benz)."),
-          tagAssunto: z.string().describe("Categoria macro (Ex: Planejamento, Debriefing). Apenas 1 a 2 palavras."),
-          kwCliente: z.string().describe("Nome do Cliente abordado. PROIBIDO SIGLAS. Nome completo oficial."),
-          kwAssunto1: z.string().describe("Assunto principal curto (1 a 3 palavras). NÃO REPITA PALAVRAS."),
-          kwAssunto2: z.string().optional().describe("Assunto principal 2 curto (1 a 3 palavras). Diferente do Assunto 1."),
-          kwAbordado1: z.string().optional().describe("Detalhe técnico curto. Diferente dos anteriores."),
-          kwAbordado2: z.string().optional().describe("Detalhe técnico 2 curto. Diferente dos anteriores."),
+          tagCliente: z.string(),
+          tagAssunto: z.string(),
+          kwCliente: z.string(),
+          kwAssunto1: z.string(),
+          kwAssunto2: z.string().optional(),
+          kwAbordado1: z.string().optional(),
+          kwAbordado2: z.string().optional(),
         }),
-        prompt: `O Título da reunião é: "${meeting.subject}".\nExtraia o contexto de negócios. O Cliente geralmente está no Título (ex: VW, MBB, Volks, Bradesco). Foque em nomes reais e palavras-chave curtas. Ignore cabeçalhos genéricos.\nNÃO GERE PALAVRAS REPETIDAS.\nTags já existentes no sistema (use se fizer sentido, mas não é obrigatório): [${existingTagsList}].\n\nAta:\n${finalMinutes.substring(0, 2000)}`,
+        prompt: `O Título da reunião é: "${meeting.subject}".
+Extraia o contexto de negócios respeitando as seguintes REGRAS RÍGIDAS:
+1. Cliente: NUNCA use siglas (Proibido VW, MBB, etc). Escreva sempre o nome OFICIAL completo (ex: Volkswagen, Mercedes-Benz).
+2. Assunto: MÁXIMO de 2 palavras. Retorne apenas uma categoria macro (ex: Planejamento, Debriefing). NÃO use vírgulas.
+3. Keywords: Não repita palavras. Seja muito conciso (1 a 3 palavras por keyword).
+4. Tags existentes: Reutilize estas se fizer sentido: [${existingTagsList}].
+
+Ata:
+${finalMinutes.substring(0, 2000)}`,
       });
       const summary: string = parsed.summary || meeting.subject;
       
-      const sanitizeKw = (str?: string) => str ? str.substring(0, 30).trim() : "";
+      const sanitizeKw = (str?: string) => str ? str.substring(0, 30).replace(/,/g, '').trim() : "";
       const rawTags = [sanitizeKw(parsed.tagCliente), sanitizeKw(parsed.tagAssunto)].filter(Boolean) as string[];
       const tags: string[] = rawTags.filter((v, i, a) => a.findIndex(t => t.toLowerCase() === v.toLowerCase()) === i);
 
