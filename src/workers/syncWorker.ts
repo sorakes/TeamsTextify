@@ -385,8 +385,8 @@ ${transcriptRaw}`,
         prompt: `Extraia o contexto de negócios desta Ata. Ignore cabeçalhos genéricos (data, hora, participantes). Foco estrito em quem é o Cliente e quais os assuntos e decisões:\n\n${finalMinutes.substring(0, 2000)}`,
       });
       const summary: string = parsed.summary || meeting.subject;
-      const tags: string[] = [parsed.tagCliente, parsed.tagAssunto].filter(Boolean);
-      const keywords: string[] = [parsed.kwCliente, parsed.kwAssunto1, parsed.kwAssunto2, parsed.kwAbordado1, parsed.kwAbordado2].filter(Boolean);
+      const tags: string[] = [parsed.tagCliente, parsed.tagAssunto].filter(Boolean) as string[];
+      const keywords: string[] = [parsed.kwCliente, parsed.kwAssunto1, parsed.kwAssunto2, parsed.kwAbordado1, parsed.kwAbordado2].filter(Boolean) as string[];
 
       // A LLM decide as tags — busca tags existentes para reutilizar ou cria nova
       const existingTags = await prisma.knowledgeTag.findMany({ select: { id: true, name: true } });
