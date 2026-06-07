@@ -432,13 +432,30 @@ ${finalMinutes.substring(0, 2000)}`,
 
       for (const t of tags) {
         if (!t) continue;
-        const tagName = t; // Mantém a formatação legível (ex: "Volkswagen")
+        const tagName = t; 
         
-        // 🧠 Auto-Merge / Fuzzy Matching para evitar fragmentação ("VW" vs "Volkswagen do Brasil")
+        // 🧠 Levenshtein Distance / Advanced Fuzzy Matching
         let tagToUse = existingTags.find(ext => {
           const e = ext.name.toLowerCase();
           const n = tagName.toLowerCase();
-          return e === n || (e.includes(n) && n.length > 4) || (n.includes(e) && e.length > 4);
+          if (e === n || (e.includes(n) && n.length > 4) || (n.includes(e) && e.length > 4)) return true;
+
+          const len = Math.max(e.length, n.length);
+          if (len === 0) return true;
+          const matrix = [];
+          for (let i = 0; i <= n.length; i++) matrix[i] = [i];
+          for (let j = 0; j <= e.length; j++) matrix[0][j] = j;
+          for (let i = 1; i <= n.length; i++) {
+            for (let j = 1; j <= e.length; j++) {
+              if (n.charAt(i - 1) === e.charAt(j - 1)) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+              } else {
+                matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1));
+              }
+            }
+          }
+          const dist = matrix[n.length][e.length];
+          return dist / len < 0.4; // Se forem até 40% parecidas, une as tags
         });
 
         if (!tagToUse) {
@@ -447,7 +464,6 @@ ${finalMinutes.substring(0, 2000)}`,
             update: {},
             create: { name: tagName, color: `hsl(${Math.floor(Math.random() * 360)}, 70%, 50%)` }
           });
-          // Adiciona a nova tag em memória para os próximos loops caso o array de rawTags repita algo semântico
           existingTags.push({ id: tagToUse.id, name: tagToUse.name });
         }
         const existingTagRel = await prisma.knowledgeNodeTag.findFirst({
