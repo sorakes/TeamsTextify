@@ -373,8 +373,8 @@ ${transcriptRaw}`,
         model: aiModel,
         schema: z.object({
           summary: z.string().describe("Resumo executivo muito curto em 1 frase."),
-          tags: z.array(z.string()).length(2).describe(`Escolha EXATAMENTE 2 tags (categorias macro). Reutilize destas se possível: [${existingTagsList}].`),
-          keywords: z.array(z.string()).length(5).describe(`Extraia EXATAMENTE 5 palavras-chave (tópicos específicos e reais). NÃO use valores genéricos como kw1.`),
+          tags: z.array(z.string()).describe(`Escolha EXATAMENTE 2 tags (categorias macro). Reutilize destas se possível: [${existingTagsList}].`),
+          keywords: z.array(z.string()).describe(`Extraia EXATAMENTE 5 palavras-chave (tópicos específicos e reais). NÃO use valores genéricos como kw1.`),
         }),
         prompt: `Ata:\n${finalMinutes.substring(0, 2000)}`,
       });
