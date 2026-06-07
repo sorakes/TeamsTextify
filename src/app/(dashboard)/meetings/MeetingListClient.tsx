@@ -3,25 +3,28 @@
 import React, { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Search, User, Users, Clock, Calendar, Send, MailX, Eye } from "lucide-react";
+import { Search, User, Users, Clock, Calendar, Eye, RefreshCw, Loader2, AlertTriangle } from "lucide-react";
 import { MeetingDrawer } from "@/components/MeetingDrawer";
 import { useSearchParams } from "next/navigation";
 
 export function MeetingListClient({ initialMeetings }: { initialMeetings: any[] }) {
   const [search, setSearch] = useState("");
+  const [meetings, setMeetings] = useState<any[]>(initialMeetings);
   const [selectedMeeting, setSelectedMeeting] = useState<any | null>(null);
+  const [reprocessingId, setReprocessingId] = useState<string | null>(null);
+  const [reprocessFeedback, setReprocessFeedback] = useState<Record<string, string>>({});
   const searchParams = useSearchParams();
 
   // Abre o drawer automaticamente se vier da rota /meetings/[id]
   useEffect(() => {
     const openId = searchParams.get("open");
     if (openId) {
-      const found = initialMeetings.find(m => m.id === openId);
+      const found = meetings.find(m => m.id === openId);
       if (found) setSelectedMeeting(found);
     }
-  }, [searchParams, initialMeetings]);
+  }, [searchParams, meetings]);
 
-  const filtered = initialMeetings.filter(m =>
+  const filtered = meetings.filter(m =>
     m.subject?.toLowerCase().includes(search.toLowerCase()) ||
     m.organizerName?.toLowerCase().includes(search.toLowerCase()) ||
     m.organizerEmail?.toLowerCase().includes(search.toLowerCase())
@@ -29,6 +32,43 @@ export function MeetingListClient({ initialMeetings }: { initialMeetings: any[] 
 
   const doneMeetings = filtered.filter(m => m.status === "DONE").length;
   const pendingMeetings = filtered.filter(m => m.status === "PENDING").length;
+  const errorMeetings = filtered.filter(m => m.status === "ERROR" || m.status === "AWAITING_RECORDING").length;
+
+  // Reprocessa um meeting específico
+  const handleReprocess = async (e: React.MouseEvent, meeting: any) => {
+    e.stopPropagation(); // Não abre o drawer
+    setReprocessingId(meeting.id);
+
+    try {
+      const res = await fetch(`/api/meetings/${meeting.id}/reprocess`, { method: "POST" });
+      const data = await res.json();
+
+      if (data.success) {
+        // Atualiza o status local para PENDING
+        setMeetings(prev =>
+          prev.map(m => m.id === meeting.id ? { ...m, status: "PENDING" } : m)
+        );
+        // Se o drawer estiver aberto com essa reunião, atualiza ele também
+        if (selectedMeeting?.id === meeting.id) {
+          setSelectedMeeting((prev: any) => ({ ...prev, status: "PENDING" }));
+        }
+        setReprocessFeedback(prev => ({ ...prev, [meeting.id]: "✅ Reenfileirado!" }));
+      } else {
+        setReprocessFeedback(prev => ({ ...prev, [meeting.id]: "❌ Erro ao reprocessar" }));
+      }
+    } catch {
+      setReprocessFeedback(prev => ({ ...prev, [meeting.id]: "❌ Erro de conexão" }));
+    } finally {
+      setReprocessingId(null);
+      setTimeout(() => {
+        setReprocessFeedback(prev => {
+          const next = { ...prev };
+          delete next[meeting.id];
+          return next;
+        });
+      }, 3500);
+    }
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in zoom-in duration-500">
@@ -54,7 +94,7 @@ export function MeetingListClient({ initialMeetings }: { initialMeetings: any[] 
       </div>
 
       {/* Stats rápidos */}
-      <div className="flex gap-4">
+      <div className="flex gap-4 flex-wrap">
         <div className="bg-zinc-900/50 border border-zinc-800 rounded-lg px-4 py-2 text-sm">
           <span className="text-zinc-500">Total: </span>
           <span className="text-white font-bold">{filtered.length}</span>
@@ -67,6 +107,13 @@ export function MeetingListClient({ initialMeetings }: { initialMeetings: any[] 
           <span className="text-zinc-500">Processando: </span>
           <span className="text-amber-400 font-bold">{pendingMeetings}</span>
         </div>
+        {errorMeetings > 0 && (
+          <div className="bg-red-950/30 border border-red-800/30 rounded-lg px-4 py-2 text-sm flex items-center gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+            <span className="text-zinc-500">Com falha: </span>
+            <span className="text-red-400 font-bold">{errorMeetings}</span>
+          </div>
+        )}
       </div>
 
       {/* Grid de Cards */}
@@ -76,37 +123,44 @@ export function MeetingListClient({ initialMeetings }: { initialMeetings: any[] 
           const duration = m.durationMinutes || Math.round((new Date(m.endedAt).getTime() - new Date(m.startedAt).getTime()) / 60000);
           const hasTranscript = !!m.transcriptRaw;
           const hasMinutes = !!m.minutesText;
-          const isNoRecording = (m.status === 'ERROR' || m.status === 'AWAITING_RECORDING') && !hasTranscript;
+          const isError = m.status === "ERROR";
+          const isAwaiting = m.status === "AWAITING_RECORDING";
+          const canReprocess = isError || isAwaiting;
+          const isPending = m.status === "PENDING" || m.status === "TRANSCRIBING" || m.status === "GENERATING";
+          const feedback = reprocessFeedback[m.id];
 
           return (
             <Card
               key={m.id}
               className={`bg-zinc-950 border-zinc-800 shadow-xl transition-all group relative overflow-hidden cursor-pointer ${
-                isNoRecording 
-                  ? "opacity-60 grayscale hover:opacity-80" 
+                canReprocess
+                  ? "hover:border-red-800/50 hover:shadow-red-950/20"
                   : "hover:border-zinc-600 hover:shadow-purple-950/30"
               }`}
               onClick={() => setSelectedMeeting(m)}
             >
               {/* Barra de status no topo */}
               <div className={`absolute top-0 left-0 w-full h-0.5 ${
-                m.status === 'DONE' ? 'bg-emerald-500' :
-                m.status === 'ERROR' ? 'bg-red-500' :
-                'bg-amber-500 animate-pulse'
+                m.status === "DONE" ? "bg-emerald-500" :
+                isError ? "bg-red-500" :
+                isAwaiting ? "bg-zinc-500" :
+                "bg-amber-500 animate-pulse"
               }`} />
 
               <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <CardTitle className="text-white text-sm leading-tight group-hover:text-purple-400 transition-colors line-clamp-2">
+                <div className="flex items-start justify-between gap-2">
+                  <CardTitle className={`text-white text-sm leading-tight line-clamp-2 transition-colors ${
+                    canReprocess ? "group-hover:text-red-400" : "group-hover:text-purple-400"
+                  }`}>
                     {m.subject}
                   </CardTitle>
                   <Badge variant="outline" className={`ml-2 shrink-0 text-[10px] uppercase tracking-widest ${
-                    isNoRecording ? 'border-zinc-500/50 text-zinc-400 bg-zinc-500/10' :
-                    m.status === 'DONE' ? 'border-emerald-500/50 text-emerald-400 bg-emerald-500/10' :
-                    m.status === 'ERROR' ? 'border-red-500/50 text-red-400 bg-red-500/10' :
-                    'border-amber-500/50 text-amber-400 bg-amber-500/10'
+                    m.status === "DONE" ? "border-emerald-500/50 text-emerald-400 bg-emerald-500/10" :
+                    isError ? "border-red-500/50 text-red-400 bg-red-500/10" :
+                    isAwaiting ? "border-zinc-500/50 text-zinc-400 bg-zinc-500/10" :
+                    "border-amber-500/50 text-amber-400 bg-amber-500/10"
                   }`}>
-                    {isNoRecording ? 'SEM GRAVAÇÃO' : m.status}
+                    {isAwaiting ? "SEM GRAVAÇÃO" : m.status}
                   </Badge>
                 </div>
               </CardHeader>
@@ -128,7 +182,7 @@ export function MeetingListClient({ initialMeetings }: { initialMeetings: any[] 
                   </span>
                   <span className="flex items-center gap-1">
                     <Clock className="w-3 h-3" />
-                    {new Date(m.startedAt).toLocaleTimeString("pt-BR", { hour: '2-digit', minute: '2-digit' })}
+                    {new Date(m.startedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
                   </span>
                   <span className="text-zinc-400 font-bold">{duration}min</span>
                 </div>
@@ -139,7 +193,7 @@ export function MeetingListClient({ initialMeetings }: { initialMeetings: any[] 
                   <span className="text-xs text-zinc-500">{participants.length} participantes</span>
                 </div>
 
-                {/* Indicadores de conteúdo */}
+                {/* Footer do card */}
                 <div className="flex items-center justify-between pt-2 border-t border-zinc-800/50">
                   <div className="flex gap-2">
                     {hasTranscript && (
@@ -152,17 +206,42 @@ export function MeetingListClient({ initialMeetings }: { initialMeetings: any[] 
                         ATA PRONTA
                       </span>
                     )}
-                    {!hasTranscript && !hasMinutes && (
+                    {isPending && !hasTranscript && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/20 text-amber-500 border border-amber-700/20 font-mono animate-pulse">
                         PROCESSANDO
                       </span>
                     )}
+                    {isError && !hasTranscript && !hasMinutes && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-900/20 text-red-400 border border-red-700/20 font-mono flex items-center gap-1">
+                        <AlertTriangle className="w-2.5 h-2.5" /> FALHOU
+                      </span>
+                    )}
                   </div>
 
-                  <span className="flex items-center gap-1 text-[10px] font-mono text-zinc-600 group-hover:text-purple-400 transition-colors">
-                    <Eye className="w-3 h-3" />
-                    VER DETALHES
-                  </span>
+                  {/* Botão de reprocessamento ou "VER DETALHES" */}
+                  {canReprocess ? (
+                    <button
+                      onClick={(e) => handleReprocess(e, m)}
+                      disabled={reprocessingId === m.id}
+                      className={`flex items-center gap-1 text-[10px] font-mono px-2 py-1 rounded transition-all ${
+                        feedback
+                          ? "text-emerald-400 border border-emerald-700/30 bg-emerald-900/20"
+                          : "text-red-400 border border-red-700/30 bg-red-900/10 hover:bg-red-900/30 hover:text-red-300 hover:border-red-600/50"
+                      }`}
+                    >
+                      {reprocessingId === m.id ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-3 h-3" />
+                      )}
+                      {feedback ?? "REPROCESSAR"}
+                    </button>
+                  ) : (
+                    <span className="flex items-center gap-1 text-[10px] font-mono text-zinc-600 group-hover:text-purple-400 transition-colors">
+                      <Eye className="w-3 h-3" />
+                      VER DETALHES
+                    </span>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -180,6 +259,17 @@ export function MeetingListClient({ initialMeetings }: { initialMeetings: any[] 
       <MeetingDrawer
         meeting={selectedMeeting}
         onClose={() => setSelectedMeeting(null)}
+        onReprocess={async (meeting) => {
+          const res = await fetch(`/api/meetings/${meeting.id}/reprocess`, { method: "POST" });
+          const data = await res.json();
+          if (data.success) {
+            setMeetings(prev =>
+              prev.map(m => m.id === meeting.id ? { ...m, status: "PENDING" } : m)
+            );
+            setSelectedMeeting((prev: any) => ({ ...prev, status: "PENDING" }));
+          }
+          return data;
+        }}
       />
     </div>
   );

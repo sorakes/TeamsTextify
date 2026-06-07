@@ -37,14 +37,6 @@ function ToastContainer({ toasts, onRemove }: { toasts: Toast[]; onRemove: (id: 
   );
 }
 
-// Progress state
-interface ScanProgress {
-  scanned: number;
-  total: number;
-  currentUser: string;
-  imported: number;
-}
-
 export default function SyncPage() {
   const [loading, setLoading] = useState(true);
   const [testing, setTesting] = useState(false);
@@ -52,17 +44,7 @@ export default function SyncPage() {
   const [errorMsg, setErrorMsg] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
   const [daysBack, setDaysBack] = useState("7");
-  const [importing, setImporting] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [progress, setProgress] = useState<ScanProgress | null>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('sync_progress');
-      if (saved) {
-        try { return JSON.parse(saved); } catch (e) {}
-      }
-    }
-    return null;
-  });
 
   const [formData, setFormData] = useState({
     tenantId: "",
@@ -70,13 +52,6 @@ export default function SyncPage() {
     clientSecret: "",
   });
 
-  useEffect(() => {
-    if (progress) {
-      localStorage.setItem('sync_progress', JSON.stringify(progress));
-    } else {
-      localStorage.removeItem('sync_progress');
-    }
-  }, [progress]);
   const addToast = useCallback((type: Toast["type"], message: string, duration = 7000) => {
     const id = ++toastId;
     setToasts(prev => [...prev, { id, type, message }]);
@@ -142,72 +117,26 @@ export default function SyncPage() {
   };
 
   const handleStartScan = async () => {
-    setImporting(true);
-    setProgress(null);
-
-    const infoId = addToast("info", "Iniciando varredura global no tenant…", 0);
-
-    try {
-      const res = await fetch("/api/sync/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ daysBack: parseInt(daysBack) }),
-      });
-
-      if (!res.body) throw new Error("Sem stream da API.");
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() || "";
-
-        for (const chunk of lines) {
-          const eventLine = chunk.split("\n").find(l => l.startsWith("event:"));
-          const dataLine = chunk.split("\n").find(l => l.startsWith("data:"));
-          if (!eventLine || !dataLine) continue;
-
-          const event = eventLine.replace("event:", "").trim();
-          const data = JSON.parse(dataLine.replace("data:", "").trim());
-
-          if (event === "start") {
-            removeToast(infoId);
-            addToast("info", `${data.totalUsers} usuários encontrados. Varrendo calendários…`, 0);
-            setProgress({ scanned: 0, total: data.totalUsers, currentUser: "", imported: 0 });
-          } else if (event === "progress") {
-            setProgress({
-              scanned: data.scanned,
-              total: data.total,
-              currentUser: data.currentUser,
-              imported: data.imported,
-            });
-          } else if (event === "done") {
-            setToasts([]);
-            setProgress(null);
-            addToast("success", `✅ Varredura concluída! ${data.usersScanned} usuários analisados — ${data.imported} reuniões importadas, ${data.duplicates} duplicatas ignoradas.`, 12000);
-          } else if (event === "error") {
-            setToasts([]);
-            setProgress(null);
-            addToast("error", `Erro: ${data.message}`, 10000);
-          }
-        }
-      }
-    } catch (err: any) {
-      setToasts([]);
-      addToast("error", `Falha ao conectar com a varredura: ${err.message}`, 8000);
-    } finally {
-      setImporting(false);
-      setProgress(null);
-    }
+    // Dispara evento para o painel global (SyncProgressPanel) que vive no layout
+    window.dispatchEvent(new CustomEvent("start_global_sync", { detail: { daysBack: parseInt(daysBack) } }));
+    addToast("info", "Varredura iniciada em segundo plano. Você pode acompanhar pelo painel lateral.", 5000);
   };
 
-  const pct = progress ? Math.round((progress.scanned / progress.total) * 100) : 0;
+  // Lemos o status global para desabilitar o botão enquanto roda
+  const [globalStatus, setGlobalStatus] = useState<string>("idle");
+  useEffect(() => {
+    const check = () => {
+      try {
+        const s = localStorage.getItem("teamstextify_sync_progress");
+        if (s) setGlobalStatus(JSON.parse(s).status);
+      } catch {}
+    };
+    check();
+    window.addEventListener("sync_progress_update", check);
+    return () => window.removeEventListener("sync_progress_update", check);
+  }, []);
+
+  const isRunning = globalStatus === "running";
 
   return (
     <>
@@ -372,7 +301,7 @@ export default function SyncPage() {
                     value={daysBack}
                     onChange={e => setDaysBack(e.target.value)}
                     className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded text-zinc-200"
-                    disabled={status !== "connected" || importing}
+                    disabled={status !== "connected" || isRunning}
                   >
                     <option value="7">Últimos 7 dias</option>
                     <option value="15">Últimos 15 dias</option>
@@ -380,38 +309,16 @@ export default function SyncPage() {
                   </select>
 
                   <button
-                    disabled={importing || status !== "connected"}
+                    disabled={isRunning || status !== "connected"}
                     onClick={handleStartScan}
                     className="w-full flex items-center justify-center gap-2 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-md transition-all shadow-lg shadow-blue-900/30"
                   >
-                    {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Server className="w-4 h-4" />}
-                    {status === "connected" ? (importing ? "Varrendo..." : "Iniciar Varredura Global") : "Conecte a API MSAL Primeiro"}
+                    {isRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Server className="w-4 h-4" />}
+                    {status === "connected" ? (isRunning ? "Varrendo no background..." : "Iniciar Varredura Global") : "Conecte a API MSAL Primeiro"}
                   </button>
                 </div>
 
-                {/* Barra de Progresso */}
-                {progress && (
-                  <div className="space-y-2 pt-2 animate-in fade-in duration-300">
-                    <div className="flex justify-between text-xs text-zinc-400 font-mono">
-                      <span>{progress.scanned} / {progress.total} usuários</span>
-                      <span className="text-blue-400 font-bold">{pct}%</span>
-                    </div>
-                    <div className="w-full bg-zinc-800 rounded-full h-2 overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-blue-600 to-blue-400 rounded-full transition-all duration-300 ease-out"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    <p className="text-[10px] text-zinc-500 font-mono truncate">
-                      → {progress.currentUser}
-                    </p>
-                    <p className="text-[10px] text-emerald-500">
-                      {progress.imported} reuniões importadas até agora
-                    </p>
-                  </div>
-                )}
-
-                {status === "connected" && !importing && (
+                {status === "connected" && !isRunning && (
                   <div className="pt-2 border-t border-zinc-800/50">
                     <p className="text-[10px] text-zinc-500 text-center">Conectado. Você já pode rodar a Varredura Global acima.</p>
                   </div>

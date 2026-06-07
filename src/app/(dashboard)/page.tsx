@@ -3,7 +3,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import prisma from "@/lib/db/prisma";
 import { HardwareMonitor } from "@/components/HardwareMonitor";
 import { MotorProcessamento } from "@/components/MotorProcessamento";
+import { AuditLogLive } from "@/components/AuditLogLive";
 
+export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default async function DashboardPage() {
@@ -11,11 +13,6 @@ export default async function DashboardPage() {
   const doneMeetings = await prisma.meeting.count({ where: { status: "DONE" } });
   const pendingMeetings = await prisma.meeting.count({ where: { status: { in: ["PENDING", "TRANSCRIBING", "GENERATING", "AWAITING_RECORDING"] } } });
   const errorLogs = await prisma.auditLog.count({ where: { level: "ERROR" } });
-
-  const recentLogs = await prisma.auditLog.findMany({
-    take: 6,
-    orderBy: { createdAt: 'desc' }
-  });
 
   return (
     <div className="space-y-6 animate-in fade-in zoom-in duration-500">
@@ -78,31 +75,17 @@ export default async function DashboardPage() {
           <HardwareMonitor />
 
           <Card className="bg-zinc-950 border-zinc-800 shadow-xl">
-            <CardHeader>
+            <CardHeader className="pb-3">
               <CardTitle className="text-white flex items-center gap-2 text-sm uppercase font-mono tracking-widest">
                 <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
                 Audit Log
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="space-y-4 font-mono text-xs overflow-hidden h-[250px]">
-                {recentLogs.length === 0 && (
-                  <p className="text-zinc-600 text-center pt-8">Nenhum log registrado.</p>
-                )}
-                {recentLogs.map((log) => (
-                  <div key={log.id} className="flex flex-col gap-1 border-b border-zinc-800/50 pb-2">
-                    <div className="flex items-center gap-2">
-                      <span className={log.level === 'ERROR' ? 'text-red-400' : log.level === 'WARNING' ? 'text-amber-400' : 'text-blue-400'}>
-                        [{log.level}]
-                      </span>
-                      <span className="text-zinc-600">{new Date(log.createdAt).toLocaleTimeString()}</span>
-                    </div>
-                    <span className="text-zinc-300 truncate">{log.message}</span>
-                  </div>
-                ))}
-              </div>
+              <AuditLogLive />
             </CardContent>
           </Card>
+
         </div>
       </div>
     </div>

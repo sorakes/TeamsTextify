@@ -24,9 +24,9 @@ const connection = new Redis({
   maxRetriesPerRequest: null,
 });
 
-async function logAudit(level: "INFO" | "WARNING" | "ERROR", message: string) {
+async function logAudit(level: "INFO" | "WARNING" | "ERROR", message: string, meetingId?: string) {
   try {
-    await prisma.auditLog.create({ data: { level, source: "Worker", message: message.substring(0, 1000) } });
+    await prisma.auditLog.create({ data: { level, source: "Worker", message: message.substring(0, 1000), meetingId: meetingId ?? null } });
   } catch (e) {
     console.error("Erro ao salvar log de auditoria:", e);
   }
@@ -173,6 +173,43 @@ async function getActiveAIModel() {
   }
 }
 
+// ── Recovery: reprocessa meetings travados por crash anterior ─────────────────
+async function recoverStalledJobs() {
+  try {
+    // Status intermediários indicam que o worker estava processando e crashou
+    const stalledMeetings = await prisma.meeting.findMany({
+      where: { status: { in: ["TRANSCRIBING", "GENERATING"] } },
+      select: { id: true, subject: true },
+    });
+
+    if (stalledMeetings.length === 0) {
+      console.log("[Worker:Recovery] Nenhuma reunião travada encontrada.");
+      return;
+    }
+
+    console.log(`[Worker:Recovery] ⚠️  ${stalledMeetings.length} reunião(ões) travada(s) detectada(s). Reprocessando...`);
+    await logAudit("WARNING", `Recovery no boot: ${stalledMeetings.length} reunião(ões) travada(s) foram rereenfileiradas automaticamente.`);
+
+    const { Queue } = await import("bullmq");
+    const recoveryQueue = new Queue("sync-meetings-queue", { connection: connection as any });
+
+    for (const meeting of stalledMeetings) {
+      // Reseta o status para PENDING antes de reprocessar
+      await prisma.meeting.update({ where: { id: meeting.id }, data: { status: "PENDING" } });
+      await recoveryQueue.add("sync-microsoft-graph", { meetingId: meeting.id }, {
+        priority: 1, // Prioridade alta
+        attempts: 3,
+        backoff: { type: "exponential", delay: 5000 },
+      });
+      console.log(`[Worker:Recovery] ✅ Reenfileirada: "${meeting.subject}" (${meeting.id})`);
+    }
+
+    await recoveryQueue.close();
+  } catch (err) {
+    console.error("[Worker:Recovery] Erro durante recovery:", err);
+  }
+}
+
 // ── Worker principal ──────────────────────────────────────────────────────────
 async function startWorker() {
   let concurrency = 1;
@@ -181,8 +218,12 @@ async function startWorker() {
     if (sys?.workerConcurrency) concurrency = sys.workerConcurrency;
   } catch { /* usa default 1 */ }
 
+  // 🛡️ Recovery: detecta e reprocessa meetings travados por crash anterior
+  await recoverStalledJobs();
+
   const syncWorker = new Worker("sync-meetings-queue", async (job: Job) => {
     const meetingId = job.data.meetingId || job.data.tenantId;
+
     if (!meetingId) throw new Error("meetingId não fornecido no Job.");
 
     const meeting = await prisma.meeting.findUnique({ where: { id: meetingId } });
@@ -212,64 +253,81 @@ async function startWorker() {
     };
 
     try {
-      // ── 1. Autenticar com MS Graph ──────────────────────────────────────────
-      await job.updateProgress(10);
-      const graphClient = await getGraphClient();
-      console.log(`[Worker] MS Graph autenticado.`);
+      let transcriptRaw = meeting.transcriptRaw;
 
-      // ── 2. Buscar URL real da gravação ──────────────────────────────────────
-      await job.updateProgress(15);
-      let recordingUrl: string;
-      try {
-        recordingUrl = await getRecordingContentUrl(graphClient, meeting);
-        console.log(`[Worker] URL da gravação obtida.`);
-      } catch (recErr: any) {
-        // Reunião sem gravação → não é erro do sistema, é estado esperado
-        await prisma.meeting.update({ where: { id: meetingId }, data: { status: "AWAITING_RECORDING" } });
-        console.log(`[Worker] Sem gravação disponível: ${recErr.message}`);
-        await logAudit("WARNING", `Reunião "${meeting.subject}" (${meetingId}) não possui gravação no MS Graph: ${recErr.message}`);
-        return { skipped: true, reason: recErr.message };
+      if (!transcriptRaw) {
+        // ── 1. Autenticar com MS Graph ──────────────────────────────────────────
+        await job.updateProgress(10);
+        const graphClient = await getGraphClient();
+        console.log(`[Worker] MS Graph autenticado.`);
+
+        // ── 2. Buscar URL real da gravação ──────────────────────────────────────
+        await job.updateProgress(15);
+        let recordingUrl: string;
+        try {
+          recordingUrl = await getRecordingContentUrl(graphClient, meeting);
+          console.log(`[Worker] URL da gravação obtida.`);
+        } catch (recErr: any) {
+          // Reunião sem gravação → não é erro do sistema, é estado esperado
+          await prisma.meeting.update({ where: { id: meetingId }, data: { status: "AWAITING_RECORDING" } });
+          console.log(`[Worker] Sem gravação disponível: ${recErr.message}`);
+          await logAudit("WARNING", `Reunião "${meeting.subject}" (${meetingId}) não possui gravação no MS Graph: ${recErr.message}`);
+          return { skipped: true, reason: recErr.message };
+        }
+
+        // ── 3. Download da gravação ─────────────────────────────────────────────
+        await job.updateProgress(20);
+        console.log(`[Worker] Baixando gravação...`);
+        // Obter um token fresh para o download
+        const system = await prisma.systemSettings.findUnique({ where: { id: "global" } });
+        const clientId = system?.entraClientId!;
+        const tenantId = system?.entraTenantId!;
+        const clientSecret = decrypt(system?.entraClientSecret || "");
+        const cca = new ConfidentialClientApplication({
+          auth: { clientId, clientSecret, authority: `https://login.microsoftonline.com/${tenantId}` }
+        });
+        const tokenResult = await cca.acquireTokenByClientCredential({
+          scopes: ["https://graph.microsoft.com/.default"],
+        });
+        await downloadFileWithAuth(recordingUrl, videoPath, tokenResult!.accessToken);
+        await job.updateProgress(40);
+        console.log(`[Worker] Download concluído: ${videoPath}`);
+
+        // ── 4. Extrair áudio com FFmpeg ─────────────────────────────────────────
+        console.log(`[Worker] Extraindo áudio com FFmpeg...`);
+        await extractAudio(videoPath, audioPath);
+        await job.updateProgress(60);
+        console.log(`[Worker] Áudio extraído: ${audioPath}`);
+
+        // ── 5. Diarização Whisper + Pyannote ────────────────────────────────────
+        const sys = await prisma.systemSettings.findUnique({ where: { id: "global" } });
+        const hfToken = (sys as any)?.huggingFaceToken;
+        if (!hfToken) throw new Error("HuggingFace Token não configurado. Acesse Configurações.");
+
+        // 🛡️ Marca como TRANSCRIBING para que o recovery detecte crash nesta etapa
+        await prisma.meeting.update({ where: { id: meetingId }, data: { status: "TRANSCRIBING" } });
+        console.log(`[Worker] Diarização em andamento (Whisper + Pyannote)...`);
+        transcriptRaw = await runDiarization(audioPath, hfToken);
+        await job.updateProgress(78);
+        console.log(`[Worker] Diarização concluída: ${transcriptRaw.split("\n").length} segmentos.`);
+
+        // Salva a transcrição antecipadamente no banco de dados (Smart Retry / Fail-Safe)
+        await prisma.meeting.update({ 
+          where: { id: meetingId }, 
+          data: { transcriptRaw, status: "GENERATING" } 
+        });
+
+        // ── 6. Limpeza dos arquivos de mídia ────────────────────────────────────
+        cleanup();
+        console.log(`[Worker] Arquivos de mídia deletados.`);
+      } else {
+        console.log(`[Worker] Transcrição já existe para "${meeting.subject}". Pulando processamento de GPU/Áudio (Smart Retry).`);
+        await job.updateProgress(78);
       }
 
-      // ── 3. Download da gravação ─────────────────────────────────────────────
-      await job.updateProgress(20);
-      console.log(`[Worker] Baixando gravação...`);
-      // Obter um token fresh para o download
-      const system = await prisma.systemSettings.findUnique({ where: { id: "global" } });
-      const clientId = system?.entraClientId!;
-      const tenantId = system?.entraTenantId!;
-      const clientSecret = decrypt(system?.entraClientSecret || "");
-      const cca = new ConfidentialClientApplication({
-        auth: { clientId, clientSecret, authority: `https://login.microsoftonline.com/${tenantId}` }
-      });
-      const tokenResult = await cca.acquireTokenByClientCredential({
-        scopes: ["https://graph.microsoft.com/.default"],
-      });
-      await downloadFileWithAuth(recordingUrl, videoPath, tokenResult!.accessToken);
-      await job.updateProgress(40);
-      console.log(`[Worker] Download concluído: ${videoPath}`);
-
-      // ── 4. Extrair áudio com FFmpeg ─────────────────────────────────────────
-      console.log(`[Worker] Extraindo áudio com FFmpeg...`);
-      await extractAudio(videoPath, audioPath);
-      await job.updateProgress(60);
-      console.log(`[Worker] Áudio extraído: ${audioPath}`);
-
-      // ── 5. Diarização Whisper + Pyannote ────────────────────────────────────
-      const sys = await prisma.systemSettings.findUnique({ where: { id: "global" } });
-      const hfToken = (sys as any)?.huggingFaceToken;
-      if (!hfToken) throw new Error("HuggingFace Token não configurado. Acesse Configurações.");
-
-      console.log(`[Worker] Diarização em andamento (Whisper + Pyannote)...`);
-      const transcriptRaw = await runDiarization(audioPath, hfToken);
-      await job.updateProgress(78);
-      console.log(`[Worker] Diarização concluída: ${transcriptRaw.split("\n").length} segmentos.`);
-
-      // ── 6. Limpeza dos arquivos de mídia ────────────────────────────────────
-      cleanup();
-      console.log(`[Worker] Arquivos de mídia deletados.`);
-
       // ── 7. Gerar Ata com LLM (usando transcrição REAL) ──────────────────────
+      // 🛡️ Marca como GENERATING para que o recovery detecte crash nesta etapa
+      await prisma.meeting.update({ where: { id: meetingId }, data: { status: "GENERATING" } });
       const aiModel = await getActiveAIModel();
       console.log(`[Worker] Gerando Ata com LLM...`);
       const { text: finalMinutes } = await generateText({
@@ -336,10 +394,18 @@ ${finalMinutes.substring(0, 2000)}`,
             title: meeting.subject,
             summary,
             keywords: JSON.stringify(keywords),
-            metadata: JSON.stringify({}),
-            tags: { create: { tagId: tagToUse.id } }
+            metadata: JSON.stringify({})
           }
         });
+
+        const existingTagRel = await prisma.knowledgeNodeTag.findFirst({
+          where: { nodeId: node.id, tagId: tagToUse.id }
+        });
+        if (!existingTagRel) {
+          await prisma.knowledgeNodeTag.create({
+            data: { nodeId: node.id, tagId: tagToUse.id }
+          });
+        }
 
         // Criar arestas com nós que compartilhem keywords
         const relatedNodes = await prisma.knowledgeNode.findMany({
@@ -373,7 +439,7 @@ ${finalMinutes.substring(0, 2000)}`,
       cleanup();
       await prisma.meeting.update({ where: { id: meetingId }, data: { status: "ERROR" } });
       console.error(`[Worker] Erro crítico no job ${job.id}:`, err);
-      await logAudit("ERROR", `Falha no processamento da reunião "${meeting.subject}" (${meetingId}): ${err.message || String(err)}`);
+      await logAudit("ERROR", `Falha no processamento da reunião "${meeting.subject}" (${meetingId}): ${err.message || String(err)}`, meetingId);
       throw err;
     }
   }, {

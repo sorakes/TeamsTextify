@@ -2,6 +2,8 @@ import React from "react";
 import Link from "next/link";
 import { Activity, Settings, BrainCircuit, FolderOpen, RefreshCw, ShieldAlert, Video } from "lucide-react";
 
+import { SyncProgressPanel } from "@/components/SyncProgressPanel";
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen bg-black text-white overflow-hidden">
@@ -46,7 +48,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </aside>
 
       {/* Main Area */}
-      <main className="flex-1 overflow-y-auto bg-background">
+      <main className="flex-1 overflow-y-auto bg-background relative">
         <header className="h-16 flex items-center justify-between px-8 border-b border-border bg-background/80 backdrop-blur-sm sticky top-0 z-10">
           <h1 className="text-sm font-medium text-muted-foreground font-mono">/overview</h1>
           <div className="text-xs text-muted-foreground font-mono">Admin Session Active</div>
@@ -54,6 +56,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div className="p-8">
           {children}
         </div>
+        
+        {/* Painel Global de Progresso da Sync */}
+        <SyncProgressPanel />
       </main>
     </div>
   );

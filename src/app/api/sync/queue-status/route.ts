@@ -42,11 +42,12 @@ export async function GET() {
     }
 
     // Conta da fila
-    const [waiting, active, completed, failed] = await Promise.all([
+    const [waiting, active, completed, failed, isPaused] = await Promise.all([
       syncQueue.getWaitingCount(),
       syncQueue.getActiveCount(),
       syncQueue.getCompletedCount(),
       syncQueue.getFailedCount(),
+      syncQueue.isPaused(),
     ]);
 
     const activeDetails = activeJobs.map(job => {
@@ -77,14 +78,14 @@ export async function GET() {
     });
 
     return NextResponse.json({
-      queue: { waiting, active, completed, failed },
+      queue: { waiting, active, completed, failed, isPaused },
       active: activeDetails,
       waiting: waitingDetails,
     });
   } catch (error) {
     console.error("Queue status error:", error);
     return NextResponse.json({
-      queue: { waiting: 0, active: 0, completed: 0, failed: 0 },
+      queue: { waiting: 0, active: 0, completed: 0, failed: 0, isPaused: false },
       active: [],
       waiting: [],
       error: String(error),
