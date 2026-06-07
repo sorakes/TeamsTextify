@@ -372,11 +372,11 @@ ${transcriptRaw}`,
       const { object: parsed } = await generateObject({
         model: aiModel,
         schema: z.object({
-          summary: z.string().describe("Resumo executivo muito curto em 1 frase."),
-          tags: z.array(z.string()).describe(`Escolha EXATAMENTE 2 tags (categorias macro). Reutilize destas se possível: [${existingTagsList}].`),
-          keywords: z.array(z.string()).describe(`Extraia EXATAMENTE 5 palavras-chave (tópicos específicos e reais). NÃO use valores genéricos como kw1.`),
+          summary: z.string().describe("Resumo executivo da reunião em 1 frase."),
+          tags: z.array(z.string()).describe(`Escolha EXATAMENTE 2 tags macro que classifiquem a ÁREA ou PROJETO da reunião (ex: Marketing, Desenvolvimento, Financeiro). NUNCA use palavras como 'ata' ou 'reunião'. Reutilize destas se possível: [${existingTagsList}].`),
+          keywords: z.array(z.string()).describe(`Extraia EXATAMENTE 5 palavras-chave reais sobre os ASSUNTOS TÉCNICOS ou DE NEGÓCIO discutidos (ex: orçamentos, docker, migração, campanha-natal). NUNCA extraia palavras genéricas como 'ata', 'reunião', 'data', 'local', 'participantes'.`),
         }),
-        prompt: `Ata:\n${finalMinutes.substring(0, 2000)}`,
+        prompt: `Extraia o contexto de negócios desta Ata. Ignore cabeçalhos genéricos (data, hora, participantes). Foco nos temas discutidos e decisões tomadas:\n\n${finalMinutes.substring(0, 2000)}`,
       });
       const summary: string = parsed.summary || meeting.subject;
       const tags: string[] = Array.isArray(parsed.tags) ? parsed.tags.slice(0, 2) : [];
