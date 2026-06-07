@@ -398,10 +398,10 @@ ${transcriptRaw}`,
         }),
         prompt: `O Título da reunião é: "${meeting.subject}".
 Extraia o contexto de negócios respeitando as seguintes REGRAS RÍGIDAS:
-1. Cliente: NUNCA use siglas. Identifique o cliente na Ata. SE JÁ EXISTIR NA LISTA DE TAGS uma variação desse cliente, COPIE EXATAMENTE o nome que está na lista. Não crie uma nova variação.
+1. Cliente: NUNCA use siglas. Identifique o cliente na Ata. SE E SOMENTE SE esse cliente já existir na lista abaixo, COPIE EXATAMENTE o nome. Se for um cliente NOVO, escreva o nome do novo cliente.
 2. Assunto: MÁXIMO de 2 palavras. Retorne apenas uma categoria macro. NÃO use vírgulas.
-3. Keywords: Não repita palavras. Seja muito conciso (1 a 3 palavras por keyword).
-4. Tags existentes (OBRIGATÓRIO USAR SE HOUVER MATCH SEMÂNTICO): [${existingTagsList}].
+3. Keywords: Não repita palavras. Seja conciso (1 a 3 palavras por keyword).
+4. Tags existentes: [${existingTagsList}]. (USE-AS APENAS SE FOR REALMENTE O MESMO ASSUNTO/CLIENTE. NÃO INVENTE CORRESPONDÊNCIAS).
 
 Ata:
 ${finalMinutes.substring(0, 2000)}`,
@@ -434,11 +434,14 @@ ${finalMinutes.substring(0, 2000)}`,
         if (!t) continue;
         const tagName = t; 
         
-        // 🧠 Levenshtein Distance / Advanced Fuzzy Matching
+        // 🧠 Levenshtein Distance / Advanced Fuzzy Matching Restrito
         let tagToUse = existingTags.find(ext => {
           const e = ext.name.toLowerCase();
           const n = tagName.toLowerCase();
-          if (e === n || (e.includes(n) && n.length > 4) || (n.includes(e) && e.length > 4)) return true;
+          
+          if (e === n) return true;
+          // Substring match apenas para palavras grandes/únicas (evita cruzar coisas curtas)
+          if ((e.includes(n) && n.length > 9) || (n.includes(e) && e.length > 9)) return true;
 
           const len = Math.max(e.length, n.length);
           if (len === 0) return true;
@@ -455,7 +458,7 @@ ${finalMinutes.substring(0, 2000)}`,
             }
           }
           const dist = matrix[n.length][e.length];
-          return dist / len < 0.4; // Se forem até 40% parecidas, une as tags
+          return dist / len < 0.3; // 30% de tolerância máxima
         });
 
         if (!tagToUse) {
