@@ -336,16 +336,28 @@ async function startWorker() {
         console.log(`[Worker] Gerando Ata com LLM...`);
         const { text } = await generateText({
           model: aiModel,
-          prompt: `Você é um assistente corporativo.
-O Título desta reunião é: "${meeting.subject}". O cliente alvo frequentemente está indicado no título.
-Abaixo está a transcrição real e diarizada de uma reunião do Microsoft Teams.
-Gere uma Ata corporativa estruturada contendo OBRIGATORIAMENTE:
-1. Cliente Abordado (Nome completo oficial da empresa abordada na reunião. Nunca use siglas)
-2. Resumo Executivo
-3. Tópicos Discutidos
-4. Decisões Tomadas
-5. Próximos Passos (Action Items) com responsáveis e prazos (se mencionados)
+          system: "Você é um assistente corporativo rigoroso especializado em documentação. Você DEVE formatar suas respostas utilizando Markdown (Títulos com #, listas com -, negrito com **). NUNCA gere textos em um único bloco ou parágrafo genérico.",
+          prompt: `O Título desta reunião é: "${meeting.subject}". O cliente alvo frequentemente está indicado no título.
+Abaixo está a transcrição de uma reunião do Microsoft Teams.
 
+GERAR UMA ATA ESTRUTURADA EM MARKDOWN contendo EXATAMENTE estes cabeçalhos:
+
+### 1. Cliente Abordado
+(Descreva o nome completo oficial da empresa. Não use siglas.)
+
+### 2. Resumo Executivo
+(Resumo em 1 parágrafo.)
+
+### 3. Tópicos Discutidos
+(Use bullet points.)
+
+### 4. Decisões Tomadas
+(Use bullet points.)
+
+### 5. Próximos Passos
+(Use bullet points. Inclua responsáveis e prazos se citados.)
+
+---
 Transcrição:
 ${transcriptRaw}`,
         });
