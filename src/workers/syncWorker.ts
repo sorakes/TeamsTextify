@@ -374,19 +374,21 @@ ${transcriptRaw}`,
         maxRetries: 0,
         schema: z.object({
           summary: z.string().describe("Resumo executivo da reunião em 1 frase."),
-          tagCliente: z.string().describe("Nome do Cliente ou Empresa principal abordado na reunião. (Ex: VW, MBB, Interno)"),
-          tagAssunto: z.string().describe("O assunto principal ou macro-categoria da reunião. (Ex: Planejamento, Debriefing)"),
-          kwCliente: z.string().describe("Nome do Cliente abordado"),
-          kwAssunto1: z.string().describe("Assunto principal 1"),
-          kwAssunto2: z.string().optional().describe("Assunto principal 2 (opcional)"),
-          kwAbordado1: z.string().optional().describe("Detalhe técnico abordado 1 (opcional)"),
-          kwAbordado2: z.string().optional().describe("Detalhe técnico abordado 2 (opcional)"),
+          tagCliente: z.string().describe("NOME do Cliente (Ex: VW, Bradesco). Apenas 1 a 2 palavras. Se não achar, use 'Interno'."),
+          tagAssunto: z.string().describe("Categoria macro (Ex: Planejamento, Debriefing). Apenas 1 a 2 palavras."),
+          kwCliente: z.string().describe("Nome do Cliente abordado. Apenas 1 palavra."),
+          kwAssunto1: z.string().describe("Assunto principal curto (1 a 3 palavras)."),
+          kwAssunto2: z.string().optional().describe("Assunto principal 2 curto (1 a 3 palavras)."),
+          kwAbordado1: z.string().optional().describe("Detalhe técnico curto (1 a 3 palavras)."),
+          kwAbordado2: z.string().optional().describe("Detalhe técnico 2 curto (1 a 3 palavras)."),
         }),
-        prompt: `Extraia o contexto de negócios desta Ata. Ignore cabeçalhos genéricos (data, hora, participantes). Foco estrito em quem é o Cliente e quais os assuntos e decisões:\n\n${finalMinutes.substring(0, 2000)}`,
+        prompt: `O Título da reunião é: "${meeting.subject}".\nExtraia o contexto de negócios. O Cliente geralmente está no Título (ex: VW, MBB, Volks, Bradesco). Foque em nomes reais e palavras-chave curtas. Ignore cabeçalhos genéricos.\n\nAta:\n${finalMinutes.substring(0, 2000)}`,
       });
       const summary: string = parsed.summary || meeting.subject;
-      const tags: string[] = [parsed.tagCliente, parsed.tagAssunto].filter(Boolean) as string[];
-      const keywords: string[] = [parsed.kwCliente, parsed.kwAssunto1, parsed.kwAssunto2, parsed.kwAbordado1, parsed.kwAbordado2].filter(Boolean) as string[];
+      
+      const sanitizeKw = (str?: string) => str ? str.substring(0, 30).trim() : "";
+      const tags: string[] = [sanitizeKw(parsed.tagCliente), sanitizeKw(parsed.tagAssunto)].filter(Boolean) as string[];
+      const keywords: string[] = [sanitizeKw(parsed.kwCliente), sanitizeKw(parsed.kwAssunto1), sanitizeKw(parsed.kwAssunto2), sanitizeKw(parsed.kwAbordado1), sanitizeKw(parsed.kwAbordado2)].filter(Boolean) as string[];
 
       // A LLM decide as tags — busca tags existentes para reutilizar ou cria nova
       const existingTags = await prisma.knowledgeTag.findMany({ select: { id: true, name: true } });
