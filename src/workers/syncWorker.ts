@@ -326,13 +326,16 @@ async function startWorker() {
       }
 
       // ── 7. Gerar Ata com LLM (usando transcrição REAL) ──────────────────────
-      // 🛡️ Marca como GENERATING para que o recovery detecte crash nesta etapa
-      await prisma.meeting.update({ where: { id: meetingId }, data: { status: "GENERATING" } });
-      const aiModel = await getActiveAIModel();
-      console.log(`[Worker] Gerando Ata com LLM...`);
-      const { text: finalMinutes } = await generateText({
-        model: aiModel,
-        prompt: `Você é um assistente corporativo.
+      let finalMinutes = meeting.minutesText;
+
+      if (!finalMinutes) {
+        // 🛡️ Marca como GENERATING para que o recovery detecte crash nesta etapa
+        await prisma.meeting.update({ where: { id: meetingId }, data: { status: "GENERATING" } });
+        const aiModel = await getActiveAIModel();
+        console.log(`[Worker] Gerando Ata com LLM...`);
+        const { text } = await generateText({
+          model: aiModel,
+          prompt: `Você é um assistente corporativo.
 Abaixo está a transcrição real e diarizada de uma reunião do Microsoft Teams.
 Gere uma Ata corporativa estruturada contendo:
 1. Resumo Executivo
@@ -342,94 +345,104 @@ Gere uma Ata corporativa estruturada contendo:
 
 Transcrição:
 ${transcriptRaw}`,
-      });
-      await job.updateProgress(88);
-      console.log(`[Worker] Ata gerada.`);
+        });
+        finalMinutes = text;
+        await job.updateProgress(88);
+        console.log(`[Worker] Ata gerada.`);
 
-      // ── 8. Salvar no banco ──────────────────────────────────────────────────
-      await prisma.meeting.update({
-        where: { id: meetingId },
-        data: { status: "DONE", transcriptRaw, minutesText: finalMinutes }
-      });
+        // Salva a Ata antecipadamente no banco de dados (Smart Retry / Fail-Safe)
+        await prisma.meeting.update({
+          where: { id: meetingId },
+          data: { minutesText: finalMinutes }
+        });
+      } else {
+        console.log(`[Worker] Ata já existe para "${meeting.subject}". Pulando geração de texto (Smart Retry).`);
+        await job.updateProgress(88);
+      }
+
       await job.updateProgress(92);
 
       // ── 9. Criar KnowledgeNode no MemoryBrain ───────────────────────────────
-      try {
-        const existingTagsForPrompt = await prisma.knowledgeTag.findMany({ select: { name: true } });
-        const existingTagsList = existingTagsForPrompt.map(t => t.name).join(", ");
-        
-        const { text: metaText } = await generateText({
-          model: aiModel,
-          prompt: `Dado o texto de Ata abaixo, responda APENAS com JSON válido:
+      // Agora é obrigatório. Sem try/catch silencioso. Se falhar, o job vai pro ERROR e pode usar o Smart Retry.
+      const aiModel = await getActiveAIModel();
+      const existingTagsForPrompt = await prisma.knowledgeTag.findMany({ select: { name: true } });
+      const existingTagsList = existingTagsForPrompt.map(t => t.name).join(", ");
+      
+      const { text: metaText } = await generateText({
+        model: aiModel,
+        prompt: `Dado o texto de Ata abaixo, responda APENAS com JSON válido:
 {"summary": "<resumo em 1 frase>", "keywords": ["kw1","kw2","kw3","kw4","kw5"]}
 
 ATENÇÃO: Você DEVE analisar as seguintes tags já existentes no sistema e reutilizá-las no array "keywords" se o assunto for correspondente: [${existingTagsList}]. Se nenhum assunto bater com as tags existentes, crie novas.
 
 Ata:
 ${finalMinutes.substring(0, 2000)}`,
-        });
-        const parsed = JSON.parse(metaText.match(/\{[\s\S]*\}/)?.[0] || "{}");
-        const summary: string = parsed.summary || meeting.subject;
-        const keywords: string[] = Array.isArray(parsed.keywords) ? parsed.keywords.slice(0, 10) : [];
+      });
+      const parsed = JSON.parse(metaText.match(/\{[\s\S]*\}/)?.[0] || "{}");
+      const summary: string = parsed.summary || meeting.subject;
+      const keywords: string[] = Array.isArray(parsed.keywords) ? parsed.keywords.slice(0, 10) : [];
 
-        // A LLM decide a tag — busca tags existentes para reutilizar ou cria nova
-        const existingTags = await prisma.knowledgeTag.findMany({ select: { id: true, name: true } });
-        let tagToUse = existingTags.find(t =>
-          keywords.some(k => k.toLowerCase().includes(t.name.toLowerCase()) || t.name.toLowerCase().includes(k.toLowerCase()))
-        );
-        if (!tagToUse) {
-          const tagName = keywords[0]?.toLowerCase().replace(/\s+/g, "-") || "geral";
-          tagToUse = await prisma.knowledgeTag.upsert({
-            where: { name: tagName },
-            update: {},
-            create: { name: tagName, color: `hsl(${Math.floor(Math.random() * 360)}, 70%, 50%)` }
-          });
-        }
-
-        const node = await prisma.knowledgeNode.upsert({
-          where: { meetingId },
-          update: { title: meeting.subject, summary, keywords: JSON.stringify(keywords) },
-          create: {
-            meetingId,
-            title: meeting.subject,
-            summary,
-            keywords: JSON.stringify(keywords),
-            metadata: JSON.stringify({})
-          }
+      // A LLM decide a tag — busca tags existentes para reutilizar ou cria nova
+      const existingTags = await prisma.knowledgeTag.findMany({ select: { id: true, name: true } });
+      let tagToUse = existingTags.find(t =>
+        keywords.some(k => k.toLowerCase().includes(t.name.toLowerCase()) || t.name.toLowerCase().includes(k.toLowerCase()))
+      );
+      if (!tagToUse) {
+        const tagName = keywords[0]?.toLowerCase().replace(/\s+/g, "-") || "geral";
+        tagToUse = await prisma.knowledgeTag.upsert({
+          where: { name: tagName },
+          update: {},
+          create: { name: tagName, color: `hsl(${Math.floor(Math.random() * 360)}, 70%, 50%)` }
         });
-
-        const existingTagRel = await prisma.knowledgeNodeTag.findFirst({
-          where: { nodeId: node.id, tagId: tagToUse.id }
-        });
-        if (!existingTagRel) {
-          await prisma.knowledgeNodeTag.create({
-            data: { nodeId: node.id, tagId: tagToUse.id }
-          });
-        }
-
-        // Criar arestas com nós que compartilhem keywords
-        const relatedNodes = await prisma.knowledgeNode.findMany({
-          where: { id: { not: node.id } },
-          select: { id: true, keywords: true }
-        });
-        for (const related of relatedNodes) {
-          const relKws: string[] = (() => { try { return JSON.parse(related.keywords); } catch { return []; } })();
-          const shared = keywords.filter(k => relKws.some(rk => rk.toLowerCase() === k.toLowerCase()));
-          if (shared.length > 0) {
-            const exists = await prisma.knowledgeEdge.findFirst({
-              where: { OR: [{ fromNodeId: node.id, toNodeId: related.id }, { fromNodeId: related.id, toNodeId: node.id }] }
-            });
-            if (!exists) {
-              await prisma.knowledgeEdge.create({
-                data: { fromNodeId: node.id, toNodeId: related.id, weight: shared.length, reason: `Tópicos em comum: ${shared.join(", ")}` }
-              });
-            }
-          }
-        }
-        console.log(`[Worker] MemoryBrain atualizado. Nó: ${node.id}`);
-      } catch (memErr) {
-        console.error(`[Worker] Erro no MemoryBrain (não crítico):`, memErr);
       }
+
+      const node = await prisma.knowledgeNode.upsert({
+        where: { meetingId },
+        update: { title: meeting.subject, summary, keywords: JSON.stringify(keywords) },
+        create: {
+          meetingId,
+          title: meeting.subject,
+          summary,
+          keywords: JSON.stringify(keywords),
+          metadata: JSON.stringify({})
+        }
+      });
+
+      const existingTagRel = await prisma.knowledgeNodeTag.findFirst({
+        where: { nodeId: node.id, tagId: tagToUse.id }
+      });
+      if (!existingTagRel) {
+        await prisma.knowledgeNodeTag.create({
+          data: { nodeId: node.id, tagId: tagToUse.id }
+        });
+      }
+
+      // Criar arestas com nós que compartilhem keywords
+      const relatedNodes = await prisma.knowledgeNode.findMany({
+        where: { id: { not: node.id } },
+        select: { id: true, keywords: true }
+      });
+      for (const related of relatedNodes) {
+        const relKws: string[] = (() => { try { return JSON.parse(related.keywords); } catch { return []; } })();
+        const shared = keywords.filter(k => relKws.some(rk => rk.toLowerCase() === k.toLowerCase()));
+        if (shared.length > 0) {
+          const exists = await prisma.knowledgeEdge.findFirst({
+            where: { OR: [{ fromNodeId: node.id, toNodeId: related.id }, { fromNodeId: related.id, toNodeId: node.id }] }
+          });
+          if (!exists) {
+            await prisma.knowledgeEdge.create({
+              data: { fromNodeId: node.id, toNodeId: related.id, weight: shared.length, reason: `Tópicos em comum: ${shared.join(", ")}` }
+            });
+          }
+        }
+      }
+      console.log(`[Worker] MemoryBrain atualizado. Nó: ${node.id}`);
+
+      // ── 8. Marcar como Concluído (Apenas no Fim) ─────────────────────────────
+      await prisma.meeting.update({
+        where: { id: meetingId },
+        data: { status: "DONE" }
+      });
 
       await job.updateProgress(100);
       console.log(`[Worker] ✅ Job ${job.id} concluído: "${meeting.subject}"`);
