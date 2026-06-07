@@ -373,26 +373,17 @@ ${transcriptRaw}`,
         model: aiModel,
         schema: z.object({
           summary: z.string().describe("Resumo executivo muito curto em 1 frase."),
-          keywords: z.array(z.string()).max(10).describe(`Extraia as 5 a 10 principais palavras-chave que definem os temas da reunião. Reutilize tags desta lista se possível: [${existingTagsList}]. NÃO use valores de exemplo genéricos.`),
+          tags: z.array(z.string()).length(2).describe(`Escolha EXATAMENTE 2 tags (categorias macro). Reutilize destas se possível: [${existingTagsList}].`),
+          keywords: z.array(z.string()).length(5).describe(`Extraia EXATAMENTE 5 palavras-chave (tópicos específicos e reais). NÃO use valores genéricos como kw1.`),
         }),
         prompt: `Ata:\n${finalMinutes.substring(0, 2000)}`,
       });
       const summary: string = parsed.summary || meeting.subject;
-      const keywords: string[] = Array.isArray(parsed.keywords) ? parsed.keywords.slice(0, 10) : [];
+      const tags: string[] = Array.isArray(parsed.tags) ? parsed.tags.slice(0, 2) : [];
+      const keywords: string[] = Array.isArray(parsed.keywords) ? parsed.keywords.slice(0, 5) : [];
 
-      // A LLM decide a tag — busca tags existentes para reutilizar ou cria nova
+      // A LLM decide as tags — busca tags existentes para reutilizar ou cria nova
       const existingTags = await prisma.knowledgeTag.findMany({ select: { id: true, name: true } });
-      let tagToUse = existingTags.find(t =>
-        keywords.some(k => k.toLowerCase().includes(t.name.toLowerCase()) || t.name.toLowerCase().includes(k.toLowerCase()))
-      );
-      if (!tagToUse) {
-        const tagName = keywords[0]?.toLowerCase().replace(/\s+/g, "-") || "geral";
-        tagToUse = await prisma.knowledgeTag.upsert({
-          where: { name: tagName },
-          update: {},
-          create: { name: tagName, color: `hsl(${Math.floor(Math.random() * 360)}, 70%, 50%)` }
-        });
-      }
 
       const node = await prisma.knowledgeNode.upsert({
         where: { meetingId },
@@ -406,13 +397,25 @@ ${transcriptRaw}`,
         }
       });
 
-      const existingTagRel = await prisma.knowledgeNodeTag.findFirst({
-        where: { nodeId: node.id, tagId: tagToUse.id }
-      });
-      if (!existingTagRel) {
-        await prisma.knowledgeNodeTag.create({
-          data: { nodeId: node.id, tagId: tagToUse.id }
+      for (const t of tags) {
+        if (!t) continue;
+        const tagName = t.toLowerCase().replace(/\s+/g, "-");
+        let tagToUse = existingTags.find(ext => ext.name.toLowerCase() === tagName);
+        if (!tagToUse) {
+          tagToUse = await prisma.knowledgeTag.upsert({
+            where: { name: tagName },
+            update: {},
+            create: { name: tagName, color: `hsl(${Math.floor(Math.random() * 360)}, 70%, 50%)` }
+          });
+        }
+        const existingTagRel = await prisma.knowledgeNodeTag.findFirst({
+          where: { nodeId: node.id, tagId: tagToUse.id }
         });
+        if (!existingTagRel) {
+          await prisma.knowledgeNodeTag.create({
+            data: { nodeId: node.id, tagId: tagToUse.id }
+          });
+        }
       }
 
       // Criar arestas com nós que compartilhem keywords
