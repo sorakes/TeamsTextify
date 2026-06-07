@@ -337,12 +337,14 @@ async function startWorker() {
         const { text } = await generateText({
           model: aiModel,
           prompt: `Você é um assistente corporativo.
+O Título desta reunião é: "${meeting.subject}". O cliente alvo frequentemente está indicado no título.
 Abaixo está a transcrição real e diarizada de uma reunião do Microsoft Teams.
-Gere uma Ata corporativa estruturada contendo:
-1. Resumo Executivo
-2. Tópicos Discutidos
-3. Decisões Tomadas
-4. Próximos Passos (Action Items) com responsáveis e prazos (se mencionados)
+Gere uma Ata corporativa estruturada contendo OBRIGATORIAMENTE:
+1. Cliente Abordado (Nome completo oficial da empresa abordada na reunião. Nunca use siglas)
+2. Resumo Executivo
+3. Tópicos Discutidos
+4. Decisões Tomadas
+5. Próximos Passos (Action Items) com responsáveis e prazos (se mencionados)
 
 Transcrição:
 ${transcriptRaw}`,
@@ -384,8 +386,8 @@ ${transcriptRaw}`,
         }),
         prompt: `O Título da reunião é: "${meeting.subject}".
 Extraia o contexto de negócios respeitando as seguintes REGRAS RÍGIDAS:
-1. Cliente: NUNCA use siglas (Proibido VW, MBB, etc). Escreva sempre o nome OFICIAL completo (ex: Volkswagen, Mercedes-Benz).
-2. Assunto: MÁXIMO de 2 palavras. Retorne apenas uma categoria macro (ex: Planejamento, Debriefing). NÃO use vírgulas.
+1. Cliente: NUNCA use siglas. Identifique o cliente na Ata e escreva sempre o seu nome OFICIAL completo.
+2. Assunto: MÁXIMO de 2 palavras. Retorne apenas uma categoria macro. NÃO use vírgulas.
 3. Keywords: Não repita palavras. Seja muito conciso (1 a 3 palavras por keyword).
 4. Tags existentes: Reutilize estas se fizer sentido: [${existingTagsList}].
 
