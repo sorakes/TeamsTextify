@@ -415,8 +415,35 @@ ${finalMinutes.substring(0, 2000)}`,
       const rawKw = [sanitizeKw(parsed.kwCliente), sanitizeKw(parsed.kwAssunto1), sanitizeKw(parsed.kwAssunto2), sanitizeKw(parsed.kwAbordado1), sanitizeKw(parsed.kwAbordado2)].filter(Boolean) as string[];
       const keywords: string[] = rawKw.filter((v, i, a) => a.findIndex(t => t.toLowerCase() === v.toLowerCase()) === i);
 
-      // A LLM decide as tags — busca tags existentes para reutilizar ou cria nova
+      // 🧠 10. Revalidação de Dupla Passada da LLM
       const existingTags = await prisma.knowledgeTag.findMany({ select: { id: true, name: true } });
+      let finalTags = tags;
+      
+      if (existingTags.length > 0 && tags.length > 0) {
+        try {
+          console.log(`[Worker] Revalidando tags extraídas com as do banco (Double Pass)...`);
+          const existingNames = existingTags.map(t => t.name).join(", ");
+          const { object: revalidated } = await generateObject({
+            model: aiModel,
+            maxRetries: 0,
+            schema: z.object({
+              revalidatedTags: z.array(z.string()).describe("Lista de tags com os nomes corrigidos baseados na lista oficial.")
+            }),
+            prompt: `Você é um curador de dados focado em normalização.
+Tags geradas inicialmente: [${tags.join(", ")}].
+Tags OFICIAIS já existentes no sistema: [${existingNames}].
+
+TAREFA:
+Para cada tag inicial, verifique se existe uma correspondência clara nas tags OFICIAIS (mesma empresa ou mesmo conceito).
+Se houver correspondência, SUBSTITUA a tag gerada copiando EXATAMENTE a tag OFICIAL.
+Se for algo completamente NOVO (sem correspondência), MANTENHA a tag gerada.
+Retorne a matriz final.`
+          });
+          finalTags = revalidated.revalidatedTags.map(t => sanitizeKw(t)).filter(Boolean);
+        } catch (err) {
+          console.warn("[Worker] Falha no LLM de revalidação, prosseguindo com tags brutas.");
+        }
+      }
 
       const node = await prisma.knowledgeNode.upsert({
         where: { meetingId },
@@ -430,35 +457,15 @@ ${finalMinutes.substring(0, 2000)}`,
         }
       });
 
-      for (const t of tags) {
+      for (const t of finalTags) {
         if (!t) continue;
         const tagName = t; 
         
-        // 🧠 Levenshtein Distance / Advanced Fuzzy Matching Restrito
+        // Match exato ou substring bem óbvio (sem elástico de matemática)
         let tagToUse = existingTags.find(ext => {
           const e = ext.name.toLowerCase();
           const n = tagName.toLowerCase();
-          
-          if (e === n) return true;
-          // Substring match apenas para palavras grandes/únicas (evita cruzar coisas curtas)
-          if ((e.includes(n) && n.length > 9) || (n.includes(e) && e.length > 9)) return true;
-
-          const len = Math.max(e.length, n.length);
-          if (len === 0) return true;
-          const matrix = [];
-          for (let i = 0; i <= n.length; i++) matrix[i] = [i];
-          for (let j = 0; j <= e.length; j++) matrix[0][j] = j;
-          for (let i = 1; i <= n.length; i++) {
-            for (let j = 1; j <= e.length; j++) {
-              if (n.charAt(i - 1) === e.charAt(j - 1)) {
-                matrix[i][j] = matrix[i - 1][j - 1];
-              } else {
-                matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1));
-              }
-            }
-          }
-          const dist = matrix[n.length][e.length];
-          return dist / len < 0.3; // 30% de tolerância máxima
+          return e === n || (e.includes(n) && n.length > 9) || (n.includes(e) && e.length > 9);
         });
 
         if (!tagToUse) {
