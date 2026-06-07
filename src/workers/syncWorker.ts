@@ -373,14 +373,19 @@ ${transcriptRaw}`,
         model: aiModel,
         schema: z.object({
           summary: z.string().describe("Resumo executivo da reunião em 1 frase."),
-          tags: z.array(z.string()).describe(`Escolha EXATAMENTE 2 tags macro que classifiquem a ÁREA ou PROJETO da reunião (ex: Marketing, Desenvolvimento, Financeiro). NUNCA use palavras como 'ata' ou 'reunião'. Reutilize destas se possível: [${existingTagsList}].`),
-          keywords: z.array(z.string()).describe(`Extraia EXATAMENTE 5 palavras-chave reais sobre os ASSUNTOS TÉCNICOS ou DE NEGÓCIO discutidos (ex: orçamentos, docker, migração, campanha-natal). NUNCA extraia palavras genéricas como 'ata', 'reunião', 'data', 'local', 'participantes'.`),
+          tagCliente: z.string().describe("Nome do Cliente ou Empresa principal abordado na reunião. (Ex: VW, MBB, Interno)"),
+          tagAssunto: z.string().describe("O assunto principal ou macro-categoria da reunião. (Ex: Planejamento, Debriefing)"),
+          kwCliente: z.string().describe("Nome do Cliente abordado"),
+          kwAssunto1: z.string().describe("Assunto principal 1"),
+          kwAssunto2: z.string().describe("Assunto principal 2"),
+          kwAbordado1: z.string().describe("Detalhe técnico abordado 1"),
+          kwAbordado2: z.string().describe("Detalhe técnico abordado 2"),
         }),
-        prompt: `Extraia o contexto de negócios desta Ata. Ignore cabeçalhos genéricos (data, hora, participantes). Foco nos temas discutidos e decisões tomadas:\n\n${finalMinutes.substring(0, 2000)}`,
+        prompt: `Extraia o contexto de negócios desta Ata. Ignore cabeçalhos genéricos (data, hora, participantes). Foco estrito em quem é o Cliente e quais os assuntos e decisões:\n\n${finalMinutes.substring(0, 2000)}`,
       });
       const summary: string = parsed.summary || meeting.subject;
-      const tags: string[] = Array.isArray(parsed.tags) ? parsed.tags.slice(0, 2) : [];
-      const keywords: string[] = Array.isArray(parsed.keywords) ? parsed.keywords.slice(0, 5) : [];
+      const tags: string[] = [parsed.tagCliente, parsed.tagAssunto].filter(Boolean);
+      const keywords: string[] = [parsed.kwCliente, parsed.kwAssunto1, parsed.kwAssunto2, parsed.kwAbordado1, parsed.kwAbordado2].filter(Boolean);
 
       // A LLM decide as tags — busca tags existentes para reutilizar ou cria nova
       const existingTags = await prisma.knowledgeTag.findMany({ select: { id: true, name: true } });
