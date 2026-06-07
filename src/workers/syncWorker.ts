@@ -9,7 +9,8 @@
 import { Worker, Job } from "bullmq";
 import Redis from "ioredis";
 import prisma from "../lib/db/prisma";
-import { generateText } from "ai";
+import { generateText, generateObject } from "ai";
+import { z } from "zod";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { decrypt } from "../lib/encryption";
@@ -368,17 +369,14 @@ ${transcriptRaw}`,
       const existingTagsForPrompt = await prisma.knowledgeTag.findMany({ select: { name: true } });
       const existingTagsList = existingTagsForPrompt.map(t => t.name).join(", ");
       
-      const { text: metaText } = await generateText({
+      const { object: parsed } = await generateObject({
         model: aiModel,
-        prompt: `Dado o texto de Ata abaixo, responda APENAS com JSON válido:
-{"summary": "<resumo em 1 frase>", "keywords": ["kw1","kw2","kw3","kw4","kw5"]}
-
-ATENÇÃO: Você DEVE analisar as seguintes tags já existentes no sistema e reutilizá-las no array "keywords" se o assunto for correspondente: [${existingTagsList}]. Se nenhum assunto bater com as tags existentes, crie novas.
-
-Ata:
-${finalMinutes.substring(0, 2000)}`,
+        schema: z.object({
+          summary: z.string().describe("Resumo executivo muito curto em 1 frase."),
+          keywords: z.array(z.string()).max(10).describe(`Extraia as 5 a 10 principais palavras-chave que definem os temas da reunião. Reutilize tags desta lista se possível: [${existingTagsList}]. NÃO use valores de exemplo genéricos.`),
+        }),
+        prompt: `Ata:\n${finalMinutes.substring(0, 2000)}`,
       });
-      const parsed = JSON.parse(metaText.match(/\{[\s\S]*\}/)?.[0] || "{}");
       const summary: string = parsed.summary || meeting.subject;
       const keywords: string[] = Array.isArray(parsed.keywords) ? parsed.keywords.slice(0, 10) : [];
 
