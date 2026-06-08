@@ -385,7 +385,7 @@ ${transcriptRaw}`,
       
       const { object: parsed } = await generateObject({
         model: aiModel,
-        maxRetries: 0,
+        maxRetries: 2,
         schema: z.object({
           summary: z.string().describe("Resumo executivo da reunião em 1 frase."),
           tagCliente: z.string(),
@@ -422,10 +422,11 @@ ${finalMinutes.substring(0, 2000)}`,
       if (existingTags.length > 0 && tags.length > 0) {
         try {
           console.log(`[Worker] Revalidando tags extraídas com as do banco (Double Pass)...`);
+          await new Promise(r => setTimeout(r, 2500)); // Delay para evitar Rate Limit 429
           const existingNames = existingTags.map(t => t.name).join(", ");
           const { object: revalidated } = await generateObject({
             model: aiModel,
-            maxRetries: 0,
+            maxRetries: 2,
             schema: z.object({
               revalidatedTags: z.array(z.string()).describe("Lista de tags com os nomes corrigidos baseados na lista oficial.")
             }),
