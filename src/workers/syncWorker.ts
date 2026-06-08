@@ -377,75 +377,84 @@ ${transcriptRaw}`,
 
       await job.updateProgress(92);
 
-      // ── 9. Criar KnowledgeNode no MemoryBrain ───────────────────────────────
-      // Agora é obrigatório. Sem try/catch silencioso. Se falhar, o job vai pro ERROR e pode usar o Smart Retry.
+      // ── 9. Criar KnowledgeNode no MemoryBrain ─────────────────────────────────
       const aiModel = await getActiveAIModel();
-      const existingTagsForPrompt = await prisma.knowledgeTag.findMany({ select: { name: true } });
-      const existingTagsList = existingTagsForPrompt.map(t => t.name).join(", ");
-      
+
+      // ─── PASSO A: Match Determinístico por Título (sem IA) ───────────────────
+      // Extrair sigla/prefixo do título para tentar encontrar a tag cliente no banco
+      const titleUpper = meeting.subject.toUpperCase();
+      const allExistingTags = await prisma.knowledgeTag.findMany({ select: { id: true, name: true } });
+
+      // Helper: encontra tag existente por match exato de nome ou sigla no título
+      const findTagByTitle = (title: string) => {
+        return allExistingTags.find(tag => {
+          const tagUp = tag.name.toUpperCase();
+          // Checa se a sigla da tag (ex: "VWB", "MBB") aparece no título
+          const words = tagUp.split(/\s+/);
+          const acronym = words.map(w => w[0]).join('');
+          if (title.includes(acronym) && acronym.length >= 2) return true;
+          // Checa se alguma palavra-chave longa do nome da tag aparece no título (>= 5 letras)
+          return words.some(w => w.length >= 5 && title.includes(w));
+        });
+      };
+
+      // ─── PASSO B: Chamada IA — Apenas 2 campos obrigatórios ─────────────────
+      const existingTagNames = allExistingTags.map(t => t.name).join(", ");
       const { object: parsed } = await generateObject({
         model: aiModel,
         maxRetries: 2,
         schema: z.object({
-          summary: z.string().describe("Resumo executivo da reunião em 1 frase."),
-          tagCliente: z.string(),
-          tagAssunto: z.string(),
-          kwCliente: z.string(),
-          kwAssunto1: z.string(),
-          kwAssunto2: z.string().optional(),
-          kwAbordado1: z.string().optional(),
-          kwAbordado2: z.string().optional(),
+          summary: z.string().describe("Resumo executivo da reunião em 1 frase curta."),
+          clienteNome: z.string().describe("Nome COMPLETO do cliente/empresa principal da reunião. Sem siglas. Ex: 'Volkswagen Caminhões e Ônibus', 'Mercedes-Benz do Brasil'."),
+          categoriaNome: z.string().describe("Categoria do assunto em 1 a 3 palavras. Ex: 'Briefing Evento', 'Conferência Executiva', 'Planejamento Campanha'."),
+          keywords: z.array(z.string()).describe("Lista de 3 a 5 palavras-chave únicas e específicas extraídas da ata."),
         }),
-        prompt: `O Título da reunião é: "${meeting.subject}".
-Extraia o contexto de negócios respeitando as seguintes REGRAS RÍGIDAS:
-1. Cliente: NUNCA use siglas. Identifique o cliente na Ata. SE E SOMENTE SE esse cliente já existir na lista abaixo, COPIE EXATAMENTE o nome. Se for um cliente NOVO, escreva o nome do novo cliente.
-2. Assunto: MÁXIMO de 2 palavras. Retorne apenas uma categoria macro. NÃO use vírgulas.
-3. Keywords: Não repita palavras. Seja conciso (1 a 3 palavras por keyword).
-4. Tags existentes: [${existingTagsList}]. (USE-AS APENAS SE FOR REALMENTE O MESMO ASSUNTO/CLIENTE. NÃO INVENTE CORRESPONDÊNCIAS).
+        prompt: `Analise a reunião abaixo e extraia as informações solicitadas.
+
+Título da reunião: "${meeting.subject}"
+
+Tags de clientes já cadastrados no sistema (USE EXATAMENTE se for o mesmo cliente, caso contrário escreva o nome novo): [${existingTagNames}]
 
 Ata:
-${finalMinutes.substring(0, 2000)}`,
+${finalMinutes.substring(0, 3000)}`,
       });
+
       const summary: string = parsed.summary || meeting.subject;
-      
-      const sanitizeKw = (str?: string) => str ? str.substring(0, 30).replace(/,/g, '').trim() : "";
-      const rawTags = [sanitizeKw(parsed.tagCliente), sanitizeKw(parsed.tagAssunto)].filter(Boolean) as string[];
-      const tags: string[] = rawTags.filter((v, i, a) => a.findIndex(t => t.toLowerCase() === v.toLowerCase()) === i);
+      const keywords: string[] = (parsed.keywords || [])
+        .map((k: string) => k.substring(0, 40).replace(/,/g, '').trim())
+        .filter(Boolean)
+        .slice(0, 5);
 
-      const rawKw = [sanitizeKw(parsed.kwCliente), sanitizeKw(parsed.kwAssunto1), sanitizeKw(parsed.kwAssunto2), sanitizeKw(parsed.kwAbordado1), sanitizeKw(parsed.kwAbordado2)].filter(Boolean) as string[];
-      const keywords: string[] = rawKw.filter((v, i, a) => a.findIndex(t => t.toLowerCase() === v.toLowerCase()) === i);
+      // ─── PASSO C: Resolução das Tags (código, não IA) ────────────────────────
+      const sanitize = (s: string) => s.substring(0, 50).replace(/,/g, '').trim();
 
-      // 🧠 10. Revalidação de Dupla Passada da LLM
-      const existingTags = await prisma.knowledgeTag.findMany({ select: { id: true, name: true } });
-      let finalTags = tags;
-      
-      if (existingTags.length > 0 && tags.length > 0) {
-        try {
-          console.log(`[Worker] Revalidando tags extraídas com as do banco (Double Pass)...`);
-          await new Promise(r => setTimeout(r, 2500)); // Delay para evitar Rate Limit 429
-          const existingNames = existingTags.map(t => t.name).join(", ");
-          const { object: revalidated } = await generateObject({
-            model: aiModel,
-            maxRetries: 2,
-            schema: z.object({
-              revalidatedTags: z.array(z.string()).describe("Lista de tags com os nomes corrigidos baseados na lista oficial.")
-            }),
-            prompt: `Você é um curador de dados focado em normalização.
-Tags geradas inicialmente: [${tags.join(", ")}].
-Tags OFICIAIS já existentes no sistema: [${existingNames}].
-
-TAREFA:
-Para cada tag inicial, verifique se existe uma correspondência clara nas tags OFICIAIS (mesma empresa ou mesmo conceito).
-Se houver correspondência, SUBSTITUA a tag gerada copiando EXATAMENTE a tag OFICIAL.
-Se for algo completamente NOVO (sem correspondência), MANTENHA a tag gerada.
-Retorne a matriz final.`
-          });
-          finalTags = revalidated.revalidatedTags.map(t => sanitizeKw(t)).filter(Boolean);
-        } catch (err) {
-          console.warn("[Worker] Falha no LLM de revalidação, prosseguindo com tags brutas.");
-        }
+      // Tag de CLIENTE
+      let clienteTagName = sanitize(parsed.clienteNome);
+      // Verificar se o match determinístico pelo título encontrou algo primeiro
+      const tagByTitle = findTagByTitle(titleUpper);
+      if (tagByTitle) {
+        clienteTagName = tagByTitle.name; // usa o nome canônico do banco
+        console.log(`[Worker] Match determinístico: "${clienteTagName}" (pelo título)`);
+      } else {
+        // Verifica se a IA retornou um nome que bate exatamente com algum cadastrado
+        const exactMatch = allExistingTags.find(t => 
+          t.name.toLowerCase() === clienteTagName.toLowerCase()
+        );
+        if (exactMatch) clienteTagName = exactMatch.name;
       }
 
+      // Tag de CATEGORIA
+      const categoriaNome = sanitize(parsed.categoriaNome);
+      const exactCatMatch = allExistingTags.find(t =>
+        t.name.toLowerCase() === categoriaNome.toLowerCase()
+      );
+      const categoriaTagName = exactCatMatch ? exactCatMatch.name : categoriaNome;
+
+      // As 2 tags finais (cliente + categoria), deduplicadas
+      const finalTagNames = [...new Set([clienteTagName, categoriaTagName].filter(Boolean))];
+      console.log(`[Worker] Tags finais: [${finalTagNames.join(", ")}]`);
+
+      // ─── PASSO D: Salvar no banco ────────────────────────────────────────────
       const node = await prisma.knowledgeNode.upsert({
         where: { meetingId },
         update: { title: meeting.subject, summary, keywords: JSON.stringify(keywords) },
@@ -458,32 +467,22 @@ Retorne a matriz final.`
         }
       });
 
-      for (const t of finalTags) {
-        if (!t) continue;
-        const tagName = t; 
-        
-        // Match exato ou substring bem óbvio (sem elástico de matemática)
-        let tagToUse = existingTags.find(ext => {
-          const e = ext.name.toLowerCase();
-          const n = tagName.toLowerCase();
-          return e === n || (e.includes(n) && n.length > 9) || (n.includes(e) && e.length > 9);
-        });
-
-        if (!tagToUse) {
-          tagToUse = await prisma.knowledgeTag.upsert({
+      for (const tagName of finalTagNames) {
+        if (!tagName) continue;
+        let tag = allExistingTags.find(t => t.name.toLowerCase() === tagName.toLowerCase());
+        if (!tag) {
+          tag = await prisma.knowledgeTag.upsert({
             where: { name: tagName },
             update: {},
             create: { name: tagName, color: `hsl(${Math.floor(Math.random() * 360)}, 70%, 50%)` }
           });
-          existingTags.push({ id: tagToUse.id, name: tagToUse.name });
+          allExistingTags.push({ id: tag.id, name: tag.name });
         }
-        const existingTagRel = await prisma.knowledgeNodeTag.findFirst({
-          where: { nodeId: node.id, tagId: tagToUse.id }
+        const existingRel = await prisma.knowledgeNodeTag.findFirst({
+          where: { nodeId: node.id, tagId: tag.id }
         });
-        if (!existingTagRel) {
-          await prisma.knowledgeNodeTag.create({
-            data: { nodeId: node.id, tagId: tagToUse.id }
-          });
+        if (!existingRel) {
+          await prisma.knowledgeNodeTag.create({ data: { nodeId: node.id, tagId: tag.id } });
         }
       }
 
