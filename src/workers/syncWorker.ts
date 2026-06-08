@@ -379,41 +379,45 @@ ${transcriptRaw}`,
 
       // ── 9. Criar KnowledgeNode no MemoryBrain ─────────────────────────────────
       const aiModel = await getActiveAIModel();
-
-      // ─── PASSO A: Match Determinístico por Título (sem IA) ───────────────────
-      // Extrair sigla/prefixo do título para tentar encontrar a tag cliente no banco
-      const titleUpper = meeting.subject.toUpperCase();
       const allExistingTags = await prisma.knowledgeTag.findMany({ select: { id: true, name: true } });
 
-      // Helper: encontra tag existente por match exato de nome ou sigla no título
-      const findTagByTitle = (title: string) => {
+      // ─── PASSO A: Helper de Match por Palavras-Chave (código, sem IA) ─────────
+      // Compara o nome retornado pela IA com tags existentes buscando palavras distintas em comum
+      // Ignora stopwords comuns para não fazer matches acidentais
+      const STOPWORDS = new Set(['de', 'do', 'da', 'dos', 'das', 'e', 'o', 'a', 'em', 'no', 'na', 'the', 'of', 'and']);
+      const significantWords = (name: string) =>
+        name.toLowerCase().split(/\s+/).filter(w => w.length >= 4 && !STOPWORDS.has(w));
+
+      const findCanonicalTag = (aiName: string) => {
+        const aiWords = significantWords(aiName);
+        if (aiWords.length === 0) return null;
+        // 1. Tentativa de match exato
+        const exact = allExistingTags.find(t => t.name.toLowerCase() === aiName.toLowerCase());
+        if (exact) return exact;
+        // 2. Match por palavras significativas em comum (pelo menos 1 palavra com >= 5 letras)
         return allExistingTags.find(tag => {
-          const tagUp = tag.name.toUpperCase();
-          // Checa se a sigla da tag (ex: "VWB", "MBB") aparece no título
-          const words = tagUp.split(/\s+/);
-          const acronym = words.map(w => w[0]).join('');
-          if (title.includes(acronym) && acronym.length >= 2) return true;
-          // Checa se alguma palavra-chave longa do nome da tag aparece no título (>= 5 letras)
-          return words.some(w => w.length >= 5 && title.includes(w));
-        });
+          const tagWords = significantWords(tag.name);
+          return tagWords.some(tw => tw.length >= 5 && aiWords.some(aw => aw.includes(tw) || tw.includes(aw)));
+        }) || null;
       };
 
-      // ─── PASSO B: Chamada IA — Apenas 2 campos obrigatórios ─────────────────
+      // ─── PASSO B: Chamada IA — lê a Ata para identificar cliente e categoria ──
       const existingTagNames = allExistingTags.map(t => t.name).join(", ");
       const { object: parsed } = await generateObject({
         model: aiModel,
         maxRetries: 2,
         schema: z.object({
           summary: z.string().describe("Resumo executivo da reunião em 1 frase curta."),
-          clienteNome: z.string().describe("Nome COMPLETO do cliente/empresa principal da reunião. Sem siglas. Ex: 'Volkswagen Caminhões e Ônibus', 'Mercedes-Benz do Brasil'."),
+          clienteNome: z.string().describe("Nome COMPLETO do cliente/empresa principal mencionado na ATA (não no título). Sem siglas. Ex: 'Volkswagen Caminhões e Ônibus', 'Mercedes-Benz do Brasil', 'Pandapé'."),
           categoriaNome: z.string().describe("Categoria do assunto em 1 a 3 palavras. Ex: 'Briefing Evento', 'Conferência Executiva', 'Planejamento Campanha'."),
           keywords: z.array(z.string()).describe("Lista de 3 a 5 palavras-chave únicas e específicas extraídas da ata."),
         }),
-        prompt: `Analise a reunião abaixo e extraia as informações solicitadas.
+        prompt: `Analise a ATA da reunião abaixo e extraia as informações solicitadas.
+O TÍTULO da reunião pode ser apenas um código interno — ignore-o para identificar o cliente. Use o CONTEÚDO DA ATA.
 
-Título da reunião: "${meeting.subject}"
+Título da reunião (referência): "${meeting.subject}"
 
-Tags de clientes já cadastrados no sistema (USE EXATAMENTE se for o mesmo cliente, caso contrário escreva o nome novo): [${existingTagNames}]
+Clientes já cadastrados no sistema (se identificar o mesmo cliente na ata, retorne o nome EXATAMENTE como está aqui): [${existingTagNames}]
 
 Ata:
 ${finalMinutes.substring(0, 3000)}`,
@@ -428,19 +432,14 @@ ${finalMinutes.substring(0, 3000)}`,
       // ─── PASSO C: Resolução das Tags (código, não IA) ────────────────────────
       const sanitize = (s: string) => s.substring(0, 50).replace(/,/g, '').trim();
 
-      // Tag de CLIENTE
+      // Tag de CLIENTE — match por palavras-chave contra o banco
       let clienteTagName = sanitize(parsed.clienteNome);
-      // Verificar se o match determinístico pelo título encontrou algo primeiro
-      const tagByTitle = findTagByTitle(titleUpper);
-      if (tagByTitle) {
-        clienteTagName = tagByTitle.name; // usa o nome canônico do banco
-        console.log(`[Worker] Match determinístico: "${clienteTagName}" (pelo título)`);
+      const canonicalCliente = findCanonicalTag(clienteTagName);
+      if (canonicalCliente) {
+        console.log(`[Worker] Tag cliente canonicalizada: "${canonicalCliente.name}" (da IA: "${clienteTagName}")`);
+        clienteTagName = canonicalCliente.name;
       } else {
-        // Verifica se a IA retornou um nome que bate exatamente com algum cadastrado
-        const exactMatch = allExistingTags.find(t => 
-          t.name.toLowerCase() === clienteTagName.toLowerCase()
-        );
-        if (exactMatch) clienteTagName = exactMatch.name;
+        console.log(`[Worker] Tag cliente nova: "${clienteTagName}"`);
       }
 
       // Tag de CATEGORIA
