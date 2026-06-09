@@ -10,7 +10,11 @@ const connection = new Redis({
   lazyConnect: true,
 });
 
-const syncQueue = new Queue("sync-meetings-queue", { connection: connection as any });
+let _syncQueue: Queue | null = null;
+function getSyncQueue() {
+  if (!_syncQueue) _syncQueue = new Queue("sync-meetings-queue", { connection: connection as any });
+  return _syncQueue;
+}
 
 // POST /api/meetings/[id]/reprocess — Reenfileira um meeting específico para reprocessamento
 export async function POST(
@@ -36,7 +40,7 @@ export async function POST(
     });
 
     // Adiciona na fila com prioridade alta
-    const job = await syncQueue.add(
+    const job = await getSyncQueue().add(
       "sync-microsoft-graph",
       { meetingId },
       {

@@ -9,12 +9,15 @@ const connection = new Redis({
   lazyConnect: true,
 });
 
-// A fila que cuidará da Sincronização de Transcrições
-export const syncQueue = new Queue("sync-meetings-queue", { connection: connection as any });
+let _syncQueue: Queue | null = null;
+function getSyncQueue() {
+  if (!_syncQueue) _syncQueue = new Queue("sync-meetings-queue", { connection: connection as any });
+  return _syncQueue;
+}
 
 // Helper para adicionar um novo Job na fila
 export async function addSyncJob(meetingId: string) {
-  return await syncQueue.add("sync-microsoft-graph", { meetingId }, {
+  return await getSyncQueue().add("sync-microsoft-graph", { meetingId }, {
     attempts: 3,
     backoff: {
       type: 'exponential',

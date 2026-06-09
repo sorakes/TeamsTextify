@@ -10,7 +10,11 @@ const connection = new Redis({
   lazyConnect: true,
 });
 
-const syncQueue = new Queue("sync-meetings-queue", { connection: connection as any });
+let _syncQueue: Queue | null = null;
+function getSyncQueue() {
+  if (!_syncQueue) _syncQueue = new Queue("sync-meetings-queue", { connection: connection as any });
+  return _syncQueue;
+}
 
 /**
  * POST /api/meetings/[id]/reprocess-granular
@@ -70,7 +74,7 @@ export async function POST(
     }
 
     // ── 2. Reenfileira com prioridade máxima ─────────────────────────────────
-    const job = await syncQueue.add(
+    const job = await getSyncQueue().add(
       "sync-microsoft-graph",
       { meetingId },
       {

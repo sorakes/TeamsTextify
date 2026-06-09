@@ -12,14 +12,18 @@ const connection = new Redis({
   lazyConnect: true,
 });
 
-const syncQueue = new Queue("sync-meetings-queue", { connection: connection as any });
+let _syncQueue: Queue | null = null;
+function getSyncQueue() {
+  if (!_syncQueue) _syncQueue = new Queue("sync-meetings-queue", { connection: connection as any });
+  return _syncQueue;
+}
 
 export async function GET() {
   try {
     // Pega os jobs ativos (que o worker está processando AGORA)
-    const activeJobs = await syncQueue.getActive();
+    const activeJobs = await getSyncQueue().getActive();
     // Pega os próximos da fila (waiting)
-    const waitingJobs = await syncQueue.getWaiting(0, 9);
+    const waitingJobs = await getSyncQueue().getWaiting(0, 9);
 
     // Busca os dados das reuniões para os jobs ativos
     const activeMeetingIds = activeJobs
@@ -43,11 +47,11 @@ export async function GET() {
 
     // Conta da fila
     const [waiting, active, completed, failed, isPaused] = await Promise.all([
-      syncQueue.getWaitingCount(),
-      syncQueue.getActiveCount(),
-      syncQueue.getCompletedCount(),
-      syncQueue.getFailedCount(),
-      syncQueue.isPaused(),
+      getSyncQueue().getWaitingCount(),
+      getSyncQueue().getActiveCount(),
+      getSyncQueue().getCompletedCount(),
+      getSyncQueue().getFailedCount(),
+      getSyncQueue().isPaused(),
     ]);
 
     const activeDetails = activeJobs.map(job => {

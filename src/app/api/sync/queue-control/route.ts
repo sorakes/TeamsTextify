@@ -10,7 +10,11 @@ const connection = new Redis({
   lazyConnect: true,
 });
 
-const syncQueue = new Queue("sync-meetings-queue", { connection: connection as any });
+let _syncQueue: Queue | null = null;
+function getSyncQueue() {
+  if (!_syncQueue) _syncQueue = new Queue("sync-meetings-queue", { connection: connection as any });
+  return _syncQueue;
+}
 
 export async function POST(req: Request) {
   try {
@@ -22,20 +26,20 @@ export async function POST(req: Request) {
     }
 
     if (action === "pause") {
-      await syncQueue.pause();
+      await getSyncQueue().pause();
       console.log("[QueueControl] 🟡 Fila PAUSADA pelo usuário.");
       return NextResponse.json({ success: true, isPaused: true, message: "Fila pausada com sucesso." });
     }
 
     if (action === "resume") {
-      await syncQueue.resume();
+      await getSyncQueue().resume();
       console.log("[QueueControl] 🟢 Fila RETOMADA pelo usuário.");
       return NextResponse.json({ success: true, isPaused: false, message: "Fila retomada com sucesso." });
     }
 
     if (action === "retry-failed") {
       // Pega todos os jobs com falha e os retenta
-      const failedJobs = await syncQueue.getFailed();
+      const failedJobs = await getSyncQueue().getFailed();
       let retried = 0;
 
       for (const job of failedJobs) {
@@ -71,8 +75,8 @@ export async function POST(req: Request) {
 // GET: retorna estado atual (pausado ou não)
 export async function GET() {
   try {
-    const isPaused = await syncQueue.isPaused();
-    const failedCount = await syncQueue.getFailedCount();
+    const isPaused = await getSyncQueue().isPaused();
+    const failedCount = await getSyncQueue().getFailedCount();
     return NextResponse.json({ isPaused, failedCount });
   } catch (error) {
     return NextResponse.json({ isPaused: false, failedCount: 0, error: String(error) }, { status: 500 });
