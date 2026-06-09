@@ -118,7 +118,14 @@ function extractAudio(videoPath: string, audioPath: string): Promise<void> {
 function runDiarization(audioPath: string, hfToken: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const py = spawn("/opt/venv/bin/python3", ["/app/src/python/diarize.py", audioPath, hfToken], {
-      env: { ...process.env, PYTHONIOENCODING: "utf-8" }
+      env: { 
+        ...process.env, 
+        PYTHONIOENCODING: "utf-8",
+        HOME: "/tmp",
+        HF_HOME: "/app/.cache",
+        PYANNOTE_CACHE: "/app/.cache",
+        PYANNOTE_DATABASE_CONFIG: "/app/.cache/database.yml"
+      }
     });
     let stdout = "";
     let stderr = "";
