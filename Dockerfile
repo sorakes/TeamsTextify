@@ -37,6 +37,10 @@ COPY . .
 # Generate prisma client (SQLite requires no external server during build)
 RUN npx prisma generate
 
+# Adjust permissions so non-root users can write to /app (e.g. SQLite database)
+RUN chown -R node:node /app
+RUN chmod -R 775 /app
+
 # Build Next.js app
 RUN npm run build
 

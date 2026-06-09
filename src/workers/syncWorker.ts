@@ -228,7 +228,10 @@ async function startWorker() {
     if (!meetingId) throw new Error("meetingId não fornecido no Job.");
 
     const meeting = await prisma.meeting.findUnique({ where: { id: meetingId } });
-    if (!meeting) throw new Error(`Reunião ${meetingId} não encontrada no banco.`);
+    if (!meeting) {
+      console.warn(`[Worker] Reunião ${meetingId} não encontrada no banco. Job ignorado para limpar fila.`);
+      return { skipped: true, reason: "Meeting not found in database." };
+    }
 
     console.log(`[Worker] Job ${job.id} → "${meeting.subject}"`);
     await job.updateProgress(5);
