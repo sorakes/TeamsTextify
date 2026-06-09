@@ -16,13 +16,24 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     try:
-        # Load Whisper model (using 'base' for faster CPU processing, can be adjusted to 'small')
-        model = whisper.load_model("base", device=device)
-        result = model.transcribe(audio_path, language="pt")
+        # Load Whisper model ('small' é o balanço ideal entre qualidade altíssima PT-BR e baixo uso de VRAM: ~2GB)
+        model = whisper.load_model("small", device=device)
+        result = model.transcribe(audio_path, language="pt", word_timestamps=True)
         
         segments = result.get("segments", [])
         
-        # Se o token HF foi fornecido, roda Pyannote para identificar os Speakers
+        # Extrair todas as palavras geradas para alinhamento fino
+        words_list = []
+        for segment in segments:
+            if "words" in segment:
+                words_list.extend(segment["words"])
+            else:
+                words_list.append({
+                    "start": segment["start"],
+                    "end": segment["end"],
+                    "word": segment["text"]
+                })
+        
         diarization_results = []
         if hf_token and hf_token.strip() != "null":
             try:
@@ -33,13 +44,11 @@ def main():
                 pipeline.to(device)
                 diarization = pipeline(audio_path)
                 
-                # Intersect Whisper segments with Pyannote speakers
-                for segment in segments:
-                    w_start = segment["start"]
-                    w_end = segment["end"]
-                    w_text = segment["text"].strip()
+                # Atribui o locutor a CADA PALAVRA individualmente (precisão absurda de milissegundos)
+                for w in words_list:
+                    w_start = w["start"]
+                    w_end = w["end"]
                     
-                    # Encontrar o speaker predominante para este segmento de tempo
                     speaker = "Speaker Desconhecido"
                     max_overlap = 0
                     for turn, _, spk in diarization.itertracks(yield_label=True):
@@ -47,12 +56,37 @@ def main():
                         if overlap > max_overlap:
                             max_overlap = overlap
                             speaker = spk
+                    w["speaker"] = speaker
+
+                # Agrupa palavras consecutivas do mesmo locutor
+                if words_list:
+                    current_speaker = words_list[0]["speaker"]
+                    current_start = words_list[0]["start"]
+                    current_end = words_list[0]["end"]
+                    current_text = [words_list[0]["word"].strip()]
+                    
+                    for w in words_list[1:]:
+                        # Se for o mesmo locutor e o silêncio entre as falas for menor que 2 segundos, junta a frase
+                        if w["speaker"] == current_speaker and (w["start"] - current_end < 2.0):
+                            current_text.append(w["word"].strip())
+                            current_end = w["end"]
+                        else:
+                            diarization_results.append({
+                                "start": current_start,
+                                "end": current_end,
+                                "speaker": current_speaker,
+                                "text": " ".join(current_text)
+                            })
+                            current_speaker = w["speaker"]
+                            current_start = w["start"]
+                            current_end = w["end"]
+                            current_text = [w["word"].strip()]
                     
                     diarization_results.append({
-                        "start": w_start,
-                        "end": w_end,
-                        "speaker": speaker,
-                        "text": w_text
+                        "start": current_start,
+                        "end": current_end,
+                        "speaker": current_speaker,
+                        "text": " ".join(current_text)
                     })
             except Exception as e:
                 # Fallback to no diarization if pyannote fails
