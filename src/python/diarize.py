@@ -1,7 +1,7 @@
 import sys
 import json
 import torch
-import whisper
+from faster_whisper import WhisperModel
 from pyannote.audio import Pipeline
 
 def main():
@@ -12,26 +12,32 @@ def main():
     audio_path = sys.argv[1]
     hf_token = sys.argv[2] if len(sys.argv) > 2 else None
 
-    # Detect device (CPU or GPU if available)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Detect device
+    device_name = "cuda" if torch.cuda.is_available() else "cpu"
+    compute_type = "float16" if torch.cuda.is_available() else "int8"
 
     try:
-        # Load Whisper model ('small' é o balanço ideal entre qualidade altíssima PT-BR e baixo uso de VRAM: ~2GB)
-        model = whisper.load_model("small", device=device)
-        result = model.transcribe(audio_path, language="pt", word_timestamps=True)
+        # Load Faster-Whisper model ('large-v3-turbo' é ultra-rápido, consome ~3GB VRAM e entende gírias perfeitamente)
+        model = WhisperModel("large-v3-turbo", device=device_name, compute_type=compute_type)
+        segments_gen, _ = model.transcribe(audio_path, language="pt", word_timestamps=True)
         
-        segments = result.get("segments", [])
+        segments = list(segments_gen)
         
-        # Extrair todas as palavras geradas para alinhamento fino
+        # Extrair palavras geradas
         words_list = []
         for segment in segments:
-            if "words" in segment:
-                words_list.extend(segment["words"])
+            if hasattr(segment, "words") and getattr(segment, "words", None):
+                for w in segment.words:
+                    words_list.append({
+                        "start": w.start,
+                        "end": w.end,
+                        "word": w.word
+                    })
             else:
                 words_list.append({
-                    "start": segment["start"],
-                    "end": segment["end"],
-                    "word": segment["text"]
+                    "start": segment.start,
+                    "end": segment.end,
+                    "word": segment.text
                 })
         
         diarization_results = []
@@ -41,10 +47,10 @@ def main():
                     "pyannote/speaker-diarization-3.1",
                     use_auth_token=hf_token
                 )
-                pipeline.to(device)
+                pipeline.to(torch.device(device_name))
                 diarization = pipeline(audio_path)
                 
-                # Atribui o locutor a CADA PALAVRA individualmente (precisão absurda de milissegundos)
+                # Atribui locutor a cada palavra
                 for w in words_list:
                     w_start = w["start"]
                     w_end = w["end"]
@@ -58,7 +64,8 @@ def main():
                             speaker = spk
                     w["speaker"] = speaker
 
-                # Agrupa palavras consecutivas do mesmo locutor
+                # Agrupa em frases brutas
+                raw_phrases = []
                 if words_list:
                     current_speaker = words_list[0]["speaker"]
                     current_start = words_list[0]["start"]
@@ -66,12 +73,11 @@ def main():
                     current_text = [words_list[0]["word"].strip()]
                     
                     for w in words_list[1:]:
-                        # Se for o mesmo locutor e o silêncio entre as falas for menor que 2 segundos, junta a frase
                         if w["speaker"] == current_speaker and (w["start"] - current_end < 2.0):
                             current_text.append(w["word"].strip())
                             current_end = w["end"]
                         else:
-                            diarization_results.append({
+                            raw_phrases.append({
                                 "start": current_start,
                                 "end": current_end,
                                 "speaker": current_speaker,
@@ -82,32 +88,70 @@ def main():
                             current_end = w["end"]
                             current_text = [w["word"].strip()]
                     
-                    diarization_results.append({
+                    raw_phrases.append({
                         "start": current_start,
                         "end": current_end,
                         "speaker": current_speaker,
                         "text": " ".join(current_text)
                     })
+
+                # Algoritmo Anti-Picote: absorve falas isoladas < 1.5s
+                for i, phrase in enumerate(raw_phrases):
+                    duration = phrase["end"] - phrase["start"]
+                    if duration < 1.5 and i > 0 and i < len(raw_phrases) - 1:
+                        prev_speaker = raw_phrases[i-1]["speaker"]
+                        next_speaker = raw_phrases[i+1]["speaker"]
+                        if prev_speaker == next_speaker and phrase["speaker"] != prev_speaker:
+                            phrase["speaker"] = prev_speaker
+
+                # Segundo passe: funde blocos adjacentes que agora têm o mesmo speaker
+                if raw_phrases:
+                    final_speaker = raw_phrases[0]["speaker"]
+                    final_start = raw_phrases[0]["start"]
+                    final_end = raw_phrases[0]["end"]
+                    final_text = [raw_phrases[0]["text"]]
+                    
+                    for p in raw_phrases[1:]:
+                        if p["speaker"] == final_speaker and (p["start"] - final_end < 2.0):
+                            final_text.append(p["text"])
+                            final_end = p["end"]
+                        else:
+                            diarization_results.append({
+                                "start": final_start,
+                                "end": final_end,
+                                "speaker": final_speaker,
+                                "text": " ".join(final_text)
+                            })
+                            final_speaker = p["speaker"]
+                            final_start = p["start"]
+                            final_end = p["end"]
+                            final_text = [p["text"]]
+                            
+                    diarization_results.append({
+                        "start": final_start,
+                        "end": final_end,
+                        "speaker": final_speaker,
+                        "text": " ".join(final_text)
+                    })
+
             except Exception as e:
-                # Fallback to no diarization if pyannote fails
                 for segment in segments:
                     diarization_results.append({
-                        "start": segment["start"],
-                        "end": segment["end"],
+                        "start": segment.start,
+                        "end": segment.end,
                         "speaker": "Speaker (Sem Diarização)",
-                        "text": segment["text"].strip()
+                        "text": segment.text.strip()
                     })
         else:
-            # Fallback (Sem Token)
             for segment in segments:
                 diarization_results.append({
-                    "start": segment["start"],
-                    "end": segment["end"],
+                    "start": segment.start,
+                    "end": segment.end,
                     "speaker": "Speaker (Sem Token Pyannote)",
-                    "text": segment["text"].strip()
+                    "text": segment.text.strip()
                 })
 
-        # Formata o texto final
+        # Formatar a saída final
         final_text = []
         for d in diarization_results:
             final_text.append(f"[{d['start']:.2f}s - {d['end']:.2f}s] {d['speaker']}: {d['text']}")

@@ -19,7 +19,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # Install Whisper, Pyannote for Diarization, and dependencies
-RUN pip install setuptools-rust openai-whisper pyannote.audio
+RUN pip install setuptools-rust faster-whisper pyannote.audio
 
 # Setup working directory
 WORKDIR /app
