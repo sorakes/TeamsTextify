@@ -153,6 +153,16 @@ export function SyncProgressPanel() {
           }
         }
       } catch (err: any) {
+        const msg = err.message?.toLowerCase() || "";
+        // Se for erro de rede (usuário recarregou a página ou fechou a aba), apenas limpa o estado
+        // Isso evita que um erro falso de "network error" trave o agendamento automático.
+        if (msg.includes("fetch") || msg.includes("network") || err.name === "AbortError") {
+          clearProgress();
+          setState(EMPTY);
+          window.dispatchEvent(new Event("sync_progress_update"));
+          return;
+        }
+        
         const next: SyncProgressState = { ...loadProgress(), status: "error", message: err.message };
         saveProgress(next); setState(next); window.dispatchEvent(new Event("sync_progress_update"));
       }
