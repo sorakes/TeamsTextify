@@ -58,6 +58,8 @@ model OrgSettings {
   llmConfigs        String   @default("{}") // JSON contendo { openai: {...}, groq: {...} }
   
   minutesTemplate  String?
+  minutesPrompt    String?  // Prompt customizado para geração de Ata (substitui o padrão se preenchido)
+  tagsPrompt       String?  // Prompt customizado para geração de Tags/Memory Brain
   monitoredTeams   String   @default("[]")
   
   organization     Organization @relation(fields: [organizationId], references: [id])
@@ -98,6 +100,7 @@ model SystemSettings {
   
   workerConcurrency      Int     @default(1)     // Quantos Workers paralelos vão rodar FFmpeg/Whisper
   huggingFaceToken       String?                 // Token para o Pyannote (Speaker Diarization)
+  syncIntervalMinutes    Int?                    // Intervalo em minutos para varredura automática (null = desativado)
 
   updatedAt          DateTime @updatedAt
 }

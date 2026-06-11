@@ -23,3 +23,12 @@ export async function GET(req: Request) {
     return NextResponse.json({ logs: [], error: String(error) }, { status: 500 });
   }
 }
+
+export async function DELETE() {
+  try {
+    const { count } = await prisma.auditLog.deleteMany({});
+    return NextResponse.json({ success: true, deleted: count });
+  } catch (error) {
+    return NextResponse.json({ success: false, error: String(error) }, { status: 500 });
+  }
+}

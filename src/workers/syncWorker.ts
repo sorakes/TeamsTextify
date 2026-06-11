@@ -180,6 +180,17 @@ async function getActiveAIModel() {
   }
 }
 
+// ── Helper: buscar prompts customizados do OrgSettings ───────────────────────
+async function getCustomPrompts(): Promise<{ minutesPrompt: string | null; tagsPrompt: string | null }> {
+  const org = await prisma.organization.findFirst();
+  if (!org) return { minutesPrompt: null, tagsPrompt: null };
+  const settings = await prisma.orgSettings.findUnique({ where: { organizationId: org.id } });
+  return {
+    minutesPrompt: (settings as any)?.minutesPrompt ?? null,
+    tagsPrompt: (settings as any)?.tagsPrompt ?? null,
+  };
+}
+
 // ── Recovery: reprocessa meetings travados por crash anterior ─────────────────
 async function recoverStalledJobs() {
   try {
@@ -342,11 +353,11 @@ async function startWorker() {
         // 🛡️ Marca como GENERATING para que o recovery detecte crash nesta etapa
         await prisma.meeting.update({ where: { id: meetingId }, data: { status: "GENERATING" } });
         const aiModel = await getActiveAIModel();
+        const customPrompts = await getCustomPrompts();
         console.log(`[Worker] Gerando Ata com LLM...`);
-        const { text } = await generateText({
-          model: aiModel,
-          system: "Você é um assistente corporativo rigoroso especializado em documentação. Você DEVE formatar suas respostas utilizando Markdown (Títulos com #, listas com -, negrito com **). NUNCA gere textos em um único bloco ou parágrafo genérico.",
-          prompt: `O Título desta reunião é: "${meeting.subject}".
+
+        // Usa prompt customizado se existir, caso contrário usa o padrão
+        const defaultMinutesPrompt = `O Título desta reunião é: "${meeting.subject}".
 Abaixo está a transcrição de uma reunião do Microsoft Teams.
 
 GERAR UMA ATA ESTRUTURADA EM MARKDOWN contendo os seguintes cabeçalhos:
@@ -370,7 +381,18 @@ Se a reunião for interna (entre membros da mesma equipe/empresa) ou não houver
 
 ---
 Transcrição:
-${transcriptRaw}`,
+${transcriptRaw}`;
+
+        const minutesPromptText = customPrompts.minutesPrompt
+          ? customPrompts.minutesPrompt
+              .replace(/\{\{TITULO\}\}/g, meeting.subject)
+              .replace(/\{\{TRANSCRICAO\}\}/g, transcriptRaw || "")
+          : defaultMinutesPrompt;
+
+        const { text } = await generateText({
+          model: aiModel,
+          system: "Você é um assistente corporativo rigoroso especializado em documentação. Você DEVE formatar suas respostas utilizando Markdown (Títulos com #, listas com -, negrito com **). NUNCA gere textos em um único bloco ou parágrafo genérico.",
+          prompt: minutesPromptText,
         });
         finalMinutes = text;
         await job.updateProgress(88);
@@ -416,13 +438,9 @@ ${transcriptRaw}`,
       // Usa generateText com instrução JSON explícita para máxima compatibilidade
       // com todos os providers (sem exigir Tool Calling ou JSON Mode nativo)
       const existingTagNames = allExistingTags.map(t => t.name).join(", ");
+      const customPrompts2 = await getCustomPrompts();
 
-      let parsed: { summary: string; clienteNome: string; categoriaNome: string; keywords: string[] };
-
-      try {
-        const { text: rawJson } = await generateText({
-          model: aiModel,
-          prompt: `Analise a ATA da reunião abaixo e retorne APENAS um objeto JSON válido, sem nenhum texto antes ou depois, sem blocos de código markdown.
+      const defaultTagsPrompt = `Analise a ATA da reunião abaixo e retorne APENAS um objeto JSON válido, sem nenhum texto antes ou depois, sem blocos de código markdown.
 
 O JSON deve ter EXATAMENTE esta estrutura:
 {
@@ -441,7 +459,21 @@ Título da reunião (referência): "${meeting.subject}"
 Clientes já cadastrados no sistema (use o nome exato se reconhecer um deles na ata): [${existingTagNames || 'nenhum'}]
 
 Ata:
-${finalMinutes.substring(0, 3000)}`,
+${finalMinutes.substring(0, 3000)}`;
+
+      const tagsPromptText = customPrompts2.tagsPrompt
+        ? customPrompts2.tagsPrompt
+            .replace(/\{\{TITULO\}\}/g, meeting.subject)
+            .replace(/\{\{ATA\}\}/g, finalMinutes.substring(0, 3000))
+            .replace(/\{\{CLIENTES_EXISTENTES\}\}/g, existingTagNames || 'nenhum')
+        : defaultTagsPrompt;
+
+      let parsed: { summary: string; clienteNome: string; categoriaNome: string; keywords: string[] };
+
+      try {
+        const { text: rawJson } = await generateText({
+          model: aiModel,
+          prompt: tagsPromptText,
         });
 
         // Parser defensivo: extrai o JSON mesmo se o modelo adicionar texto ao redor

@@ -39,11 +39,13 @@ export async function POST(req: Request) {
       update: {
         workerConcurrency: data.workerConcurrency !== undefined ? data.workerConcurrency : undefined,
         huggingFaceToken: data.huggingFaceToken !== undefined ? data.huggingFaceToken : undefined,
+        syncIntervalMinutes: data.syncIntervalMinutes !== undefined ? data.syncIntervalMinutes : undefined,
       },
       create: {
         id: "global",
         workerConcurrency: data.workerConcurrency !== undefined ? data.workerConcurrency : 1,
         huggingFaceToken: data.huggingFaceToken,
+        syncIntervalMinutes: data.syncIntervalMinutes ?? null,
       }
     });
     return NextResponse.json({ success: true, settings });

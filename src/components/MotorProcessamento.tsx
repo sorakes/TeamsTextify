@@ -116,13 +116,6 @@ export function MotorProcessamento() {
 
           <div className="flex items-center gap-3 text-[10px] font-mono text-zinc-500">
             <span className="text-amber-400">{stats.waiting} na fila</span>
-            <span className="text-emerald-400">{stats.completed} concluídos</span>
-            {stats.failed > 0 && (
-              <span className="text-red-400 flex items-center gap-1">
-                <AlertTriangle className="w-3 h-3" />
-                {stats.failed} falhas
-              </span>
-            )}
           </div>
         </div>
 

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, CloudCog, ShieldCheck, ShieldAlert, KeyRound, Server, AlertCircle, CheckCircle2, X } from "lucide-react";
+import { Loader2, CloudCog, ShieldCheck, ShieldAlert, KeyRound, Server, AlertCircle, CheckCircle2, X, Timer, Save } from "lucide-react";
 
 // Toast system
 interface Toast {
@@ -52,6 +52,11 @@ export default function SyncPage() {
     clientSecret: "",
   });
 
+  // Schedule state
+  const [scheduleInterval, setScheduleInterval] = useState<string>("60");
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleSaved, setScheduleSaved] = useState(false);
+
   const addToast = useCallback((type: Toast["type"], message: string, duration = 7000) => {
     const id = ++toastId;
     setToasts(prev => [...prev, { id, type, message }]);
@@ -75,6 +80,13 @@ export default function SyncPage() {
         setStatus("connected");
       } else {
         setStatus("disconnected");
+      }
+
+      // Load schedule interval
+      const sysRes = await fetch("/api/settings/system");
+      const sysData = await sysRes.json();
+      if (sysData.settings?.syncIntervalMinutes) {
+        setScheduleInterval(String(sysData.settings.syncIntervalMinutes));
       }
     } catch {
       setStatus("error");
@@ -137,6 +149,22 @@ export default function SyncPage() {
   }, []);
 
   const isRunning = globalStatus === "running";
+
+  const handleSaveSchedule = async () => {
+    setScheduleLoading(true);
+    try {
+      const mins = parseInt(scheduleInterval);
+      await fetch("/api/settings/system", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ syncIntervalMinutes: isNaN(mins) || mins < 5 ? null : mins }),
+      });
+      setScheduleSaved(true);
+      setTimeout(() => setScheduleSaved(false), 3000);
+    } finally {
+      setScheduleLoading(false);
+    }
+  };
 
   return (
     <>
@@ -334,9 +362,46 @@ export default function SyncPage() {
                   <li>Calendars.Read (Application/Aplicativo)</li>
                   <li>OnlineMeetings.Read.All</li>
                   <li>User.Read.All</li>
+                  <li>Files.Read.All</li>
                   <li>Mail.Send</li>
                 </ul>
                 <p className="mt-2 text-[10px] text-amber-500/80 bg-amber-500/10 p-2 rounded">O Consentimento do Administrador (Admin Consent) no Entra ID é obrigatório para estas permissões.</p>
+              </CardContent>
+            </Card>
+
+            {/* Schedule — Varredura Automática */}
+            <Card className="bg-zinc-950 border-zinc-800">
+              <CardHeader>
+                <CardTitle className="text-zinc-100 flex items-center gap-2">
+                  <Timer className="w-5 h-5 text-blue-400" />
+                  Agendamento Automático
+                </CardTitle>
+                <CardDescription className="text-zinc-400">
+                  Defina de quantos em quantos minutos o sistema vai varrer automaticamente por novas reuniões.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-mono text-zinc-400">Intervalo em minutos</label>
+                  <input
+                    type="number"
+                    min="5"
+                    max="1440"
+                    value={scheduleInterval}
+                    onChange={e => setScheduleInterval(e.target.value)}
+                    placeholder="Ex: 60"
+                    className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded text-zinc-200 font-mono text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <p className="text-[10px] text-zinc-600">Mínimo: 5 minutos. Deixe em branco para desativar.</p>
+                </div>
+                <button
+                  onClick={handleSaveSchedule}
+                  disabled={scheduleLoading}
+                  className="w-full flex items-center justify-center gap-2 py-2 bg-blue-600/80 hover:bg-blue-600 disabled:opacity-50 text-white font-bold text-sm rounded-md transition-all"
+                >
+                  {scheduleLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {scheduleSaved ? "✅ Salvo!" : "Salvar Agendamento"}
+                </button>
               </CardContent>
             </Card>
           </div>

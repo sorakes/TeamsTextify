@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Trash2, Loader2 } from "lucide-react";
 
 interface AuditLogEntry {
   id: string;
@@ -26,29 +27,22 @@ const LEVEL_DOT: Record<string, string> = {
 export function AuditLogLive() {
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [isConnected, setIsConnected] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
   const lastIdRef = useRef<string | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const isFirstLoad = useRef(true);
 
   const fetchLogs = async () => {
     try {
-      const res = await fetch("/api/audit-logs?limit=15", { cache: "no-store" });
+      const res = await fetch("/api/audit-logs?limit=50", { cache: "no-store" });
       if (!res.ok) throw new Error();
       const data = await res.json();
       const incoming: AuditLogEntry[] = data.logs || [];
 
-      if (incoming.length === 0) {
-        setIsConnected(true);
-        return;
-      }
-
       if (isFirstLoad.current) {
-        // Primeiro carregamento: mostra os últimos 15
         setLogs(incoming);
         lastIdRef.current = incoming[0]?.id ?? null;
         isFirstLoad.current = false;
       } else {
-        // Polling incremental: adiciona apenas logs novos no topo
         const lastId = lastIdRef.current;
         const newLogs = lastId
           ? incoming.filter((l) => l.id !== lastId && new Date(l.createdAt) > new Date(logs[0]?.createdAt ?? 0))
@@ -56,7 +50,7 @@ export function AuditLogLive() {
 
         if (newLogs.length > 0) {
           setLogs((prev) => {
-            const merged = [...newLogs, ...prev].slice(0, 30); // máx 30 entradas no display
+            const merged = [...newLogs, ...prev].slice(0, 50);
             return merged;
           });
           lastIdRef.current = newLogs[0]?.id ?? lastIdRef.current;
@@ -66,6 +60,18 @@ export function AuditLogLive() {
       setIsConnected(true);
     } catch {
       setIsConnected(false);
+    }
+  };
+
+  const handleClear = async () => {
+    setIsClearing(true);
+    try {
+      await fetch("/api/audit-logs", { method: "DELETE" });
+      setLogs([]);
+      lastIdRef.current = null;
+      isFirstLoad.current = true;
+    } finally {
+      setIsClearing(false);
     }
   };
 
@@ -87,15 +93,24 @@ export function AuditLogLive() {
           <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
             Audit Log
           </span>
+          <span className="text-[9px] font-mono text-zinc-600">
+            {isConnected ? "• ao vivo" : "offline"}
+          </span>
         </div>
-        <span className="text-[9px] font-mono text-zinc-600">
-          {isConnected ? "• ao vivo" : "offline"}
-        </span>
+        <button
+          onClick={handleClear}
+          disabled={isClearing || logs.length === 0}
+          title="Limpar todos os logs"
+          className="flex items-center gap-1 text-[9px] font-mono uppercase tracking-wider text-zinc-600 hover:text-red-400 hover:border-red-500/30 border border-zinc-800 px-2 py-0.5 rounded transition-all disabled:opacity-40"
+        >
+          {isClearing ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <Trash2 className="w-2.5 h-2.5" />}
+          Limpar
+        </button>
       </div>
 
-      {/* Lista de logs */}
-      <ScrollArea className="h-[250px] pr-1">
-        <div ref={scrollRef} className="space-y-3 font-mono text-xs">
+      {/* Lista de logs com scroll */}
+      <ScrollArea className="h-[380px]">
+        <div className="space-y-3 font-mono text-xs pr-3">
           {logs.length === 0 && (
             <p className="text-zinc-600 text-center pt-8 font-mono text-xs">
               Nenhum log registrado.

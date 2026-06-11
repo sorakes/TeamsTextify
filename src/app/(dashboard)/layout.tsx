@@ -1,6 +1,6 @@
 import React from "react";
 import Link from "next/link";
-import { Activity, Settings, BrainCircuit, FolderOpen, RefreshCw, ShieldAlert, Video } from "lucide-react";
+import { Activity, Settings, BrainCircuit, FolderOpen, RefreshCw, ShieldAlert, Video, FileText } from "lucide-react";
 
 import { SyncProgressPanel } from "@/components/SyncProgressPanel";
 
@@ -33,6 +33,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Link href="/rules" className="flex items-center px-3 py-2 text-sm text-muted-foreground hover:bg-accent/50 rounded-md font-mono transition-colors">
             <ShieldAlert className="w-4 h-4 mr-3 text-amber-400" />
             Rules
+          </Link>
+          <Link href="/prompts" className="flex items-center px-3 py-2 text-sm text-muted-foreground hover:bg-accent/50 rounded-md font-mono transition-colors">
+            <FileText className="w-4 h-4 mr-3 text-purple-400" />
+            Prompts
           </Link>
           <Link href="/settings" className="flex items-center px-3 py-2 text-sm text-muted-foreground hover:bg-accent/50 rounded-md font-mono transition-colors">
             <Settings className="w-4 h-4 mr-3" />
