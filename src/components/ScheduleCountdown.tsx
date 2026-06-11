@@ -29,7 +29,14 @@ export function ScheduleCountdown() {
 
       try {
         const s = localStorage.getItem("teamstextify_last_scan_at");
-        if (s) setLastScanAt(new Date(s));
+        if (s) {
+          setLastScanAt(new Date(s));
+        } else {
+          // Se não houver data anterior (ex: primeira vez), inicia a partir de agora
+          const now = new Date();
+          setLastScanAt(now);
+          try { localStorage.setItem("teamstextify_last_scan_at", now.toISOString()); } catch {}
+        }
       } catch {}
     } catch {}
   }, []);
@@ -38,14 +45,18 @@ export function ScheduleCountdown() {
     loadConfig();
   }, [loadConfig]);
 
+  const prevStatusRef = React.useRef<string>("idle");
+
   // Quando um scan termina (done/error), registra o horário do último scan
+  // Apenas se a varredura tiver acabado de rodar (transição), para evitar reset no F5
   useEffect(() => {
-    if (isDone || isError) {
+    if ((isDone || isError) && prevStatusRef.current === "running") {
       const now = new Date();
       setLastScanAt(now);
       try { localStorage.setItem("teamstextify_last_scan_at", now.toISOString()); } catch {}
     }
-  }, [isDone, isError]);
+    prevStatusRef.current = syncState.status;
+  }, [syncState.status, isDone, isError]);
 
   // Countdown ticker — só ativo quando não está rodando
   useEffect(() => {
@@ -58,9 +69,7 @@ export function ScheduleCountdown() {
       const elapsed = Math.floor((Date.now() - lastScanAt.getTime()) / 1000);
       const remaining = Math.max(total - elapsed, 0);
       setSecondsLeft(remaining);
-      if (remaining === 0) {
-        triggerScan();
-      }
+      // O frontend não dispara mais a varredura! O BullMQ no backend assume o controle.
     };
     tick();
     const id = setInterval(tick, 1000);
