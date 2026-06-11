@@ -129,6 +129,26 @@ export function MeetingListClient({ initialMeetings }: { initialMeetings: any[] 
           const isPending = m.status === "PENDING" || m.status === "TRANSCRIBING" || m.status === "GENERATING";
           const feedback = reprocessFeedback[m.id];
 
+          // Inferência granular da etapa da falha
+          const failStage: "TRANSCRIPTION" | "ATA" | "MEMORY_BRAIN" | null = isError
+            ? !hasTranscript
+              ? "TRANSCRIPTION"
+              : !hasMinutes
+              ? "ATA"
+              : "MEMORY_BRAIN"
+            : null;
+
+          const failStageLabel: Record<string, string> = {
+            TRANSCRIPTION: "ERRO NA TRANSCRIÇÃO",
+            ATA: "ERRO NA ATA",
+            MEMORY_BRAIN: "ERRO NO MEMORY BRAIN",
+          };
+          const failStageTitle: Record<string, string> = {
+            TRANSCRIPTION: "Falhou ao baixar ou transcrever o áudio",
+            ATA: "Transcrição OK — falhou ao gerar a Ata com IA",
+            MEMORY_BRAIN: "Ata OK — falhou ao gerar tags/nó no Knowledge Graph",
+          };
+
           return (
             <Card
               key={m.id}
@@ -211,9 +231,13 @@ export function MeetingListClient({ initialMeetings }: { initialMeetings: any[] 
                         PROCESSANDO
                       </span>
                     )}
-                    {isError && !hasTranscript && !hasMinutes && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-900/20 text-red-400 border border-red-700/20 font-mono flex items-center gap-1">
-                        <AlertTriangle className="w-2.5 h-2.5" /> FALHOU
+                    {failStage && (
+                      <span
+                        title={failStageTitle[failStage]}
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-red-900/20 text-red-400 border border-red-700/30 font-mono flex items-center gap-1 cursor-help animate-in fade-in"
+                      >
+                        <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
+                        {failStageLabel[failStage]}
                       </span>
                     )}
                   </div>

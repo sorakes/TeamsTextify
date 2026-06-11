@@ -9,8 +9,7 @@
 import { Worker, Job } from "bullmq";
 import Redis from "ioredis";
 import prisma from "../lib/db/prisma";
-import { generateText, generateObject } from "ai";
-import { z } from "zod";
+import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { decrypt } from "../lib/encryption";
@@ -347,13 +346,15 @@ async function startWorker() {
         const { text } = await generateText({
           model: aiModel,
           system: "Você é um assistente corporativo rigoroso especializado em documentação. Você DEVE formatar suas respostas utilizando Markdown (Títulos com #, listas com -, negrito com **). NUNCA gere textos em um único bloco ou parágrafo genérico.",
-          prompt: `O Título desta reunião é: "${meeting.subject}". O cliente alvo frequentemente está indicado no título.
+          prompt: `O Título desta reunião é: "${meeting.subject}".
 Abaixo está a transcrição de uma reunião do Microsoft Teams.
 
-GERAR UMA ATA ESTRUTURADA EM MARKDOWN contendo EXATAMENTE estes cabeçalhos:
+GERAR UMA ATA ESTRUTURADA EM MARKDOWN contendo os seguintes cabeçalhos:
 
-### 1. Cliente Abordado
-(Descreva o nome completo oficial da empresa. Não use siglas.)
+### 1. Cliente / Empresa Externa (OPCIONAL)
+INCLUA esta seção APENAS se na transcrição houver menção explícita a um cliente externo ou empresa terceira como foco da reunião.
+Se a reunião for interna (entre membros da mesma equipe/empresa) ou não houver cliente mencionado, OMITA esta seção completamente.
+(Quando presente: descreva o nome completo oficial da empresa. Não use siglas.)
 
 ### 2. Resumo Executivo
 (Resumo em 1 parágrafo.)
@@ -362,10 +363,10 @@ GERAR UMA ATA ESTRUTURADA EM MARKDOWN contendo EXATAMENTE estes cabeçalhos:
 (Use bullet points.)
 
 ### 4. Decisões Tomadas
-(Use bullet points.)
+(Use bullet points. Se não houver decisões claras, escreva "Nenhuma decisão formal registrada.")
 
 ### 5. Próximos Passos
-(Use bullet points. Inclua responsáveis e prazos se citados.)
+(Use bullet points. Inclua responsáveis e prazos se citados. Se não houver, escreva "Nenhum próximo passo definido.")
 
 ---
 Transcrição:
@@ -412,26 +413,61 @@ ${transcriptRaw}`,
       };
 
       // ─── PASSO B: Chamada IA — lê a Ata para identificar cliente e categoria ──
+      // Usa generateText com instrução JSON explícita para máxima compatibilidade
+      // com todos os providers (sem exigir Tool Calling ou JSON Mode nativo)
       const existingTagNames = allExistingTags.map(t => t.name).join(", ");
-      const { object: parsed } = await generateObject({
-        model: aiModel,
-        maxRetries: 2,
-        schema: z.object({
-          summary: z.string().describe("Resumo executivo da reunião em 1 frase curta."),
-          clienteNome: z.string().describe("Nome COMPLETO do cliente/empresa principal mencionado na ATA (não no título). Sem siglas. Ex: 'Volkswagen Caminhões e Ônibus', 'Mercedes-Benz do Brasil', 'Pandapé'."),
-          categoriaNome: z.string().describe("Categoria do assunto em 1 a 3 palavras. Ex: 'Briefing Evento', 'Conferência Executiva', 'Planejamento Campanha'."),
-          keywords: z.array(z.string()).describe("Lista de 3 a 5 palavras-chave únicas e específicas extraídas da ata."),
-        }),
-        prompt: `Analise a ATA da reunião abaixo e extraia as informações solicitadas.
-O TÍTULO da reunião pode ser apenas um código interno — ignore-o para identificar o cliente. Use o CONTEÚDO DA ATA.
+
+      let parsed: { summary: string; clienteNome: string; categoriaNome: string; keywords: string[] };
+
+      try {
+        const { text: rawJson } = await generateText({
+          model: aiModel,
+          prompt: `Analise a ATA da reunião abaixo e retorne APENAS um objeto JSON válido, sem nenhum texto antes ou depois, sem blocos de código markdown.
+
+O JSON deve ter EXATAMENTE esta estrutura:
+{
+  "summary": "Resumo executivo em 1 frase.",
+  "clienteNome": "Nome COMPLETO do cliente/empresa externa REAL mencionado na ata (sem siglas). OBRIGATÓRIO retornar string vazia \"\" se: (1) não houver cliente externo explicitamente citado, (2) for reunião interna, (3) o único nome for da própria equipe/empresa.",
+  "categoriaNome": "Categoria do assunto principal em 1 a 3 palavras (ex: Planejamento, Vendas, Suporte, Onboarding). Nunca use nomes de pessoas ou palavras genéricas como 'Reunião'.",
+  "keywords": ["palavra-chave1", "palavra-chave2", "palavra-chave3"]
+}
+
+REGRAS CRÍTICAS:
+- Se a reunião NÃO menciona nenhum cliente externo real → "clienteNome" DEVE ser "" (string vazia)
+- Nunca invente um cliente. Só coloque um nome se ele aparecer explicitamente na ata como empresa contratante ou parceira
+- "keywords" devem ser substantivos relevantes do conteúdo (máx. 5 palavras)
 
 Título da reunião (referência): "${meeting.subject}"
-
-Clientes já cadastrados no sistema (se identificar o mesmo cliente na ata, retorne o nome EXATAMENTE como está aqui): [${existingTagNames}]
+Clientes já cadastrados no sistema (use o nome exato se reconhecer um deles na ata): [${existingTagNames || 'nenhum'}]
 
 Ata:
 ${finalMinutes.substring(0, 3000)}`,
-      });
+        });
+
+        // Parser defensivo: extrai o JSON mesmo se o modelo adicionar texto ao redor
+        const jsonMatch = rawJson.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error("Modelo não retornou JSON válido.");
+        const candidate = JSON.parse(jsonMatch[0]);
+
+        parsed = {
+          summary: typeof candidate.summary === "string" ? candidate.summary : meeting.subject,
+          clienteNome: typeof candidate.clienteNome === "string" ? candidate.clienteNome : "",
+          categoriaNome: typeof candidate.categoriaNome === "string" ? candidate.categoriaNome : "",
+          keywords: Array.isArray(candidate.keywords)
+            ? candidate.keywords.filter((k: unknown) => typeof k === "string")
+            : [],
+        };
+      } catch (parseErr: any) {
+        // Se a LLM falhar ou retornar JSON inválido, usa fallback seguro SEM criar tags espúrias
+        console.warn(`[Worker] Memory Brain: parser falhou (${parseErr.message}). Usando fallback sem tags.`);
+        await logAudit("WARNING", `Memory Brain usou fallback para "${meeting.subject}" — provider retornou JSON inválido: ${parseErr.message}`, meetingId);
+        parsed = {
+          summary: meeting.subject,
+          clienteNome: "",   // NUNCA inferir cliente do título no fallback
+          categoriaNome: "", // NUNCA inferir categoria do título no fallback
+          keywords: [],       // NUNCA criar keywords genéricas de título
+        };
+      }
 
       const summary: string = parsed.summary || meeting.subject;
       const keywords: string[] = (parsed.keywords || [])
