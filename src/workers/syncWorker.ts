@@ -228,6 +228,137 @@ async function recoverStalledJobs() {
   }
 }
 
+// ── Global Sync Logic ─────────────────────────────────────────────────────────
+async function runGlobalSync(job: Job) {
+  const daysBack = job.data.daysBack || 60;
+  
+  const setRedisProgress = async (state: any) => {
+    await connection.set("teamstextify_global_sync_progress", JSON.stringify({ ...state, lastUpdate: Date.now() }));
+  };
+
+  await setRedisProgress({ status: "running", scanned: 0, total: 0, currentUser: "", imported: 0, message: "" });
+  console.log(`[Worker] Iniciando Varredura Global (Global Sync) em background...`);
+
+  try {
+    const graphClient = await getGraphClient();
+    const dateLimit = new Date();
+    dateLimit.setDate(dateLimit.getDate() - daysBack);
+
+    let users: any[] = [];
+    let nextLink: string | null = '/users?$select=id,userPrincipalName,mail,displayName';
+    while (nextLink) {
+      const usersResponse = await graphClient.api(nextLink).get();
+      if (usersResponse.value) users.push(...usersResponse.value);
+      nextLink = usersResponse['@odata.nextLink'] || null;
+    }
+
+    const totalUsers = users.length;
+    await setRedisProgress({ status: "running", scanned: 0, total: totalUsers, currentUser: "", imported: 0, message: "" });
+
+    const org = await prisma.organization.findFirst();
+    if (!org) throw new Error("Nenhuma organização encontrada no banco.");
+
+    let totalImported = 0;
+    let usersScanned = 0;
+
+    for (const user of users) {
+      const email = user.mail || user.userPrincipalName;
+      if (!email) continue;
+
+      usersScanned++;
+      await setRedisProgress({
+        status: "running",
+        scanned: usersScanned,
+        total: totalUsers,
+        currentUser: email,
+        imported: totalImported,
+      });
+
+      try {
+        const possiblePaths = [
+          "root:/Documents/Recordings:/children",
+          "root:/Documentos/Recordings:/children",
+          "root:/Recordings:/children",
+          "root:/Gravações:/children"
+        ];
+
+        let foundRecordingsFolder = false;
+
+        for (const path of possiblePaths) {
+          if (foundRecordingsFolder) break;
+
+          const driveItemsResponse = await graphClient.api(`/users/${user.id}/drive/${path}`)
+            .select("id,name,createdDateTime,lastModifiedDateTime,file,audio,video,webUrl")
+            .get().catch(() => null);
+
+          if (driveItemsResponse?.value) {
+            foundRecordingsFolder = true;
+            const mp4s = driveItemsResponse.value.filter((i: any) => i.name?.toLowerCase().endsWith(".mp4"));
+
+            for (const mp4 of mp4s) {
+              const fileDate = mp4.createdDateTime || mp4.lastModifiedDateTime;
+              if (!fileDate || new Date(fileDate) < dateLimit) continue;
+
+              const existing = await prisma.meeting.findUnique({ where: { teamsId: mp4.id } });
+              if (existing) continue;
+
+              let durationMinutes = 0;
+              if (mp4.video?.duration) durationMinutes = Math.round(mp4.video.duration / 60000);
+              else if (mp4.audio?.duration) durationMinutes = Math.round(mp4.audio.duration / 60000);
+
+              let participantsArr: string[] = [];
+              try {
+                const perms = await graphClient.api(`/users/${user.id}/drive/items/${mp4.id}/permissions`).get();
+                if (perms?.value) {
+                  perms.value.forEach((perm: any) => {
+                    const grantedTo = perm.grantedToV2 || perm.grantedTo;
+                    if (grantedTo?.user?.email) participantsArr.push(grantedTo.user.email);
+                    const identities = perm.grantedToIdentitiesV2 || perm.grantedToIdentities || [];
+                    identities.forEach((i: any) => { if (i?.user?.email) participantsArr.push(i.user.email); });
+                  });
+                }
+              } catch (err) {}
+              participantsArr = [...new Set(participantsArr.filter(Boolean))];
+
+              const newMeeting = await prisma.meeting.create({
+                data: {
+                  teamsId: mp4.id,
+                  organizationId: org.id,
+                  subject: mp4.name?.replace(".mp4", "") || "Gravação Sem Título",
+                  startedAt: new Date(fileDate),
+                  endedAt: new Date(fileDate),
+                  durationMinutes,
+                  participants: JSON.stringify(participantsArr),
+                  organizerEmail: email,
+                  organizerName: user.displayName || "Desconhecido",
+                  joinUrl: mp4.webUrl || `/users/${user.id}/drive/items/${mp4.id}`,
+                  ownerId: user.id || null,
+                  status: "PENDING",
+                },
+              });
+              
+              const { Queue } = await import("bullmq");
+              const addQueue = new Queue("sync-meetings-queue", { connection: connection as any });
+              await addQueue.add("sync-microsoft-graph", { meetingId: newMeeting.id });
+              await addQueue.close();
+
+              totalImported++;
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
+    await setRedisProgress({ status: "done", scanned: usersScanned, total: totalUsers, currentUser: "", imported: totalImported });
+    console.log(`[Worker] Varredura Global concluída. ${totalImported} novas reuniões encontradas.`);
+    return { success: true, imported: totalImported };
+  } catch (err: any) {
+    await setRedisProgress({ status: "error", message: err.message });
+    console.error(`[Worker] Erro na Varredura Global:`, err);
+    throw err;
+  }
+}
+
 // ── Worker principal ──────────────────────────────────────────────────────────
 async function startWorker() {
   let concurrency = 1;
@@ -239,7 +370,34 @@ async function startWorker() {
   // 🛡️ Recovery: detecta e reprocessa meetings travados por crash anterior
   await recoverStalledJobs();
 
+  // 🕒 Configurar agendamento de varredura global
+  try {
+    const sys = await (prisma as any).systemSettings?.findUnique({ where: { id: "global" } });
+    if (sys && sys.syncIntervalMinutes) {
+      const { Queue } = await import("bullmq");
+      const q = new Queue("sync-meetings-queue", { connection: connection as any });
+      
+      const repeatables = await q.getRepeatableJobs();
+      for (const r of repeatables) await q.removeRepeatableByKey(r.key);
+      
+      if (sys.syncIntervalMinutes > 0) {
+        await q.add("global-sync", { daysBack: 60 }, {
+          repeat: { every: sys.syncIntervalMinutes * 60 * 1000 },
+          jobId: "global-sync-cron"
+        });
+        console.log(`[Worker] ⏰ Cronjob Global Sync configurado: a cada ${sys.syncIntervalMinutes} minutos.`);
+      }
+      await q.close();
+    }
+  } catch (err) {
+    console.error("[Worker] Erro ao configurar cron job:", err);
+  }
+
   const syncWorker = new Worker("sync-meetings-queue", async (job: Job) => {
+    if (job.name === "global-sync") {
+      return await runGlobalSync(job);
+    }
+
     const meetingId = job.data.meetingId || job.data.tenantId;
 
     if (!meetingId) throw new Error("meetingId não fornecido no Job.");

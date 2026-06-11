@@ -88,25 +88,44 @@ export function SyncProgressPanel() {
     };
     sync();
     window.addEventListener("sync_progress_update", sync);
-    // Polling como fallback caso o tab não receba o evento
-    const interval = setInterval(sync, 2000);
     return () => {
       window.removeEventListener("sync_progress_update", sync);
-      clearInterval(interval);
     };
   }, []);
 
-  // Event listener para INICIAR a varredura global (disparado da página Sync)
+  // Polling de 1 em 1 segundo no backend (Estado Global Real)
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch("/api/sync/global-status");
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.status && data.status !== "idle") {
+            const current = loadProgress();
+            const { lastUpdate: _, ...newData } = data;
+            const { lastUpdate: __, ...curData } = current as any;
+            if (JSON.stringify(newData) !== JSON.stringify(curData)) {
+              saveProgress(data);
+              setState(data);
+              window.dispatchEvent(new Event("sync_progress_update"));
+            }
+          }
+        }
+      } catch (err) {}
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     const handleStart = async (e: Event) => {
       const customEvent = e as CustomEvent;
-      const daysBack = customEvent.detail?.daysBack || 7;
+      const daysBack = customEvent.detail?.daysBack || 60;
       
       setOpen(true);
-      const startTime = Date.now();
-      const initialState: SyncProgressState = { status: "running", scanned: 0, total: 0, currentUser: "", imported: 0, startedAt: startTime, daysBack };
-      saveProgress(initialState);
-      setState(initialState);
+      const next: SyncProgressState = { ...loadProgress(), status: "running", scanned: 0, currentUser: "Conectando...", message: "" };
+      saveProgress(next);
+      setState(next);
+      window.dispatchEvent(new Event("sync_progress_update"));
 
       try {
         const res = await fetch("/api/sync/import", {
@@ -114,57 +133,12 @@ export function SyncProgressPanel() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ daysBack }),
         });
-
-        if (!res.body) throw new Error("Sem stream da API.");
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-
-          const lines = buffer.split("\n\n");
-          buffer = lines.pop() || "";
-
-          for (const chunk of lines) {
-            const eventLine = chunk.split("\n").find(l => l.startsWith("event:"));
-            const dataLine = chunk.split("\n").find(l => l.startsWith("data:"));
-            if (!eventLine || !dataLine) continue;
-
-            const event = eventLine.replace("event:", "").trim();
-            const data = JSON.parse(dataLine.replace("data:", "").trim());
-
-            if (event === "start") {
-              const next: SyncProgressState = { ...loadProgress(), total: data.totalUsers };
-              saveProgress(next); setState(next); window.dispatchEvent(new Event("sync_progress_update"));
-            } else if (event === "progress") {
-              const next: SyncProgressState = { ...loadProgress(), scanned: data.scanned, total: data.total, currentUser: data.currentUser, imported: data.imported };
-              saveProgress(next); setState(next); window.dispatchEvent(new Event("sync_progress_update"));
-            } else if (event === "done") {
-              const next: SyncProgressState = { ...loadProgress(), status: "done", imported: data.imported, scanned: data.usersScanned, currentUser: "" };
-              saveProgress(next); setState(next); window.dispatchEvent(new Event("sync_progress_update"));
-            } else if (event === "error") {
-              const next: SyncProgressState = { ...loadProgress(), status: "error", message: data.message };
-              saveProgress(next); setState(next); window.dispatchEvent(new Event("sync_progress_update"));
-            }
-          }
-        }
+        if (!res.ok) throw new Error("Falha ao iniciar varredura no servidor.");
       } catch (err: any) {
-        const msg = err.message?.toLowerCase() || "";
-        // Se for erro de rede (usuário recarregou a página ou fechou a aba), apenas limpa o estado
-        // Isso evita que um erro falso de "network error" trave o agendamento automático.
-        if (msg.includes("fetch") || msg.includes("network") || err.name === "AbortError") {
-          clearProgress();
-          setState(EMPTY);
-          window.dispatchEvent(new Event("sync_progress_update"));
-          return;
-        }
-        
-        const next: SyncProgressState = { ...loadProgress(), status: "error", message: err.message };
-        saveProgress(next); setState(next); window.dispatchEvent(new Event("sync_progress_update"));
+        const errorState: SyncProgressState = { ...loadProgress(), status: "error", message: err.message };
+        saveProgress(errorState);
+        setState(errorState);
+        window.dispatchEvent(new Event("sync_progress_update"));
       }
     };
 
