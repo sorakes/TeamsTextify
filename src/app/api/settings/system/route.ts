@@ -48,6 +48,37 @@ export async function POST(req: Request) {
         syncIntervalMinutes: data.syncIntervalMinutes ?? null,
       }
     });
+
+    // Sincroniza imediatamente o BullMQ
+    if (data.syncIntervalMinutes !== undefined) {
+      try {
+        const { Queue } = await import("bullmq");
+        const Redis = (await import("ioredis")).default;
+        const connection = new Redis({
+          host: process.env.REDIS_HOST || "127.0.0.1",
+          port: parseInt(process.env.REDIS_PORT || "6379"),
+        });
+        const q = new Queue("sync-meetings-queue", { connection: connection as any });
+        
+        const repeatables = await q.getRepeatableJobs();
+        for (const r of repeatables) {
+          if (r.id === "global-sync-cron") {
+             await q.removeRepeatableByKey(r.key);
+          }
+        }
+        
+        if (data.syncIntervalMinutes !== null && data.syncIntervalMinutes > 0) {
+          await q.add("global-sync", { daysBack: 3 }, {
+            repeat: { every: data.syncIntervalMinutes * 60 * 1000 },
+            jobId: "global-sync-cron"
+          });
+        }
+        await q.close();
+        connection.disconnect();
+      } catch (e) {
+        console.error("Error updating BullMQ cron:", e);
+      }
+    }
     return NextResponse.json({ success: true, settings });
   } catch (error: any) {
     console.error("POST System Settings Error:", error);

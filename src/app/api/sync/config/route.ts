@@ -87,6 +87,16 @@ export async function POST(req: Request) {
       }
     });
 
+    // Garante que existe uma organização padrão usando o TenantID
+    await prisma.organization.upsert({
+      where: { tenantId: tenantId },
+      update: { name: "Default Organization" },
+      create: {
+        tenantId: tenantId,
+        name: "Default Organization"
+      }
+    });
+
     return NextResponse.json({ success: true, message: "Conexão bem-sucedida. Credenciais salvas com segurança." });
   } catch (error) {
     console.error("Erro ao salvar config:", error);

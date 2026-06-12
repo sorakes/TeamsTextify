@@ -101,7 +101,7 @@ export function SyncProgressPanel() {
         const res = await fetch("/api/sync/global-status");
         if (res.ok) {
           const data = await res.json();
-          if (data && data.status && data.status !== "idle") {
+          if (data && data.status) {
             const current = loadProgress();
             const { lastUpdate: _, ...newData } = data;
             const { lastUpdate: __, ...curData } = current as any;
