@@ -8,7 +8,6 @@ import { useSyncProgress } from "@/components/SyncProgressPanel";
 export function ScheduleCountdown() {
   const [intervalMinutes, setIntervalMinutes] = useState<number | null>(null);
   const [secondsLeft, setSecondsLeft] = useState<number>(0);
-  const [lastScanAt, setLastScanAt] = useState<Date | null>(null);
   const [isTriggeringManual, setIsTriggeringManual] = useState(false);
 
   // Usa o mesmo estado global do SyncProgressPanel
@@ -26,18 +25,6 @@ export function ScheduleCountdown() {
       const data = await res.json();
       const mins: number | null = data.settings?.syncIntervalMinutes ?? null;
       setIntervalMinutes(mins);
-
-      try {
-        const s = localStorage.getItem("teamstextify_last_scan_at");
-        if (s) {
-          setLastScanAt(new Date(s));
-        } else {
-          // Se não houver data anterior (ex: primeira vez), inicia a partir de agora
-          const now = new Date();
-          setLastScanAt(now);
-          try { localStorage.setItem("teamstextify_last_scan_at", now.toISOString()); } catch {}
-        }
-      } catch {}
     } catch {}
   }, []);
 
@@ -45,37 +32,20 @@ export function ScheduleCountdown() {
     loadConfig();
   }, [loadConfig]);
 
-  const prevStatusRef = React.useRef<string>("idle");
-
-  // Quando um scan termina (done/error), registra o horário do último scan
-  // Apenas se a varredura tiver acabado de rodar (transição), para evitar reset no F5
-  useEffect(() => {
-    if ((isDone || isError) && prevStatusRef.current === "running") {
-      const now = new Date();
-      setLastScanAt(now);
-      try { localStorage.setItem("teamstextify_last_scan_at", now.toISOString()); } catch {}
-    }
-    prevStatusRef.current = syncState.status;
-  }, [syncState.status, isDone, isError]);
-
   // Countdown ticker — só ativo quando não está rodando
   useEffect(() => {
-    if (!intervalMinutes || !lastScanAt || isRunning) {
-      setSecondsLeft(intervalMinutes ? intervalMinutes * 60 : 0);
+    if (!intervalMinutes || isRunning || !syncState.nextRunAt) {
+      setSecondsLeft(intervalMinutes && !syncState.nextRunAt ? intervalMinutes * 60 : 0);
       return;
     }
-    const total = intervalMinutes * 60;
     const tick = () => {
-      const elapsed = Math.floor((Date.now() - lastScanAt.getTime()) / 1000);
-      const remaining = Math.max(total - elapsed, 0);
+      const remaining = Math.max(0, Math.floor((syncState.nextRunAt! - Date.now()) / 1000));
       setSecondsLeft(remaining);
-      // O frontend não dispara mais a varredura! O BullMQ no backend assume o controle.
     };
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [intervalMinutes, lastScanAt, isRunning]);
+  }, [intervalMinutes, isRunning, syncState.nextRunAt]);
 
   const triggerScan = () => {
     if (isRunning) return;
@@ -199,9 +169,9 @@ export function ScheduleCountdown() {
                   />
                 </div>
 
-                {lastScanAt && (
+                {syncState.startedAt && (
                   <p className="text-[9px] text-zinc-600 font-mono mt-1.5">
-                    Último scan: {lastScanAt.toLocaleTimeString("pt-BR")}
+                    Último scan: {new Date(syncState.startedAt).toLocaleTimeString("pt-BR")}
                     {isDone && ` · ${syncState.imported} importadas`}
                   </p>
                 )}

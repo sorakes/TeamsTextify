@@ -16,6 +16,7 @@ export interface SyncProgressState {
   message?: string;
   startedAt?: number;
   daysBack?: number;
+  nextRunAt?: number;
 }
 
 const STORAGE_KEY = "teamstextify_sync_progress";

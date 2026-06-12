@@ -11,17 +11,22 @@ const redis = new Redis({
 export async function GET() {
   try {
     const raw = await redis.get("teamstextify_global_sync_progress");
-    if (!raw) {
-      return NextResponse.json({
-        status: "idle",
-        scanned: 0,
-        total: 0,
-        currentUser: "",
-        imported: 0,
-        message: ""
-      });
-    }
-    return NextResponse.json(JSON.parse(raw));
+    let state = raw ? JSON.parse(raw) : {
+      status: "idle", scanned: 0, total: 0, currentUser: "", imported: 0, message: ""
+    };
+
+    try {
+      const { Queue } = await import("bullmq");
+      const q = new Queue("sync-meetings-queue", { connection: redis as any });
+      const repeatables = await q.getRepeatableJobs();
+      const globalJob = repeatables.find(r => r.id === "global-sync-cron");
+      if (globalJob) {
+        state.nextRunAt = globalJob.next;
+      }
+      await q.close();
+    } catch (e) {}
+
+    return NextResponse.json(state);
   } catch (error: any) {
     return NextResponse.json(
       { status: "error", message: "Erro ao ler progresso do Redis: " + error.message },
