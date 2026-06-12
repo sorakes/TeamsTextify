@@ -381,7 +381,7 @@ async function startWorker() {
       for (const r of repeatables) await q.removeRepeatableByKey(r.key);
       
       if (sys.syncIntervalMinutes > 0) {
-        await q.add("global-sync", { daysBack: 60 }, {
+        await q.add("global-sync", { daysBack: 3 }, {
           repeat: { every: sys.syncIntervalMinutes * 60 * 1000 },
           jobId: "global-sync-cron"
         });

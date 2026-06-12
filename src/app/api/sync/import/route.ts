@@ -13,7 +13,7 @@ const syncQueue = new Queue("sync-meetings-queue", { connection: connection as a
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
-    const daysBack = body.daysBack || 60;
+    const daysBack = body.daysBack || 3;
 
     // Dispara o job de varredura global imediatamente
     await syncQueue.add("global-sync", { daysBack }, {
