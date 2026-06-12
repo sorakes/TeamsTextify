@@ -19,7 +19,7 @@ export async function GET() {
       const { Queue } = await import("bullmq");
       const q = new Queue("sync-meetings-queue", { connection: redis as any });
       const repeatables = await q.getRepeatableJobs();
-      const globalJob = repeatables.find(r => r.id === "global-sync-cron");
+      const globalJob = repeatables.find(r => r.name === "global-sync");
       if (globalJob) {
         state.nextRunAt = globalJob.next;
       }
