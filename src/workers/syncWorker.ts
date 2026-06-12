@@ -612,6 +612,11 @@ ${transcriptRaw}`;
           );
           console.log(`[Worker] E-mail enviado com sucesso para ${participants.length + 1} destinatários.`);
           await logAudit("INFO", `E-mail automático enviado para reunião "${meeting.subject}".`, meetingId);
+          // Marca que o e-mail foi enviado para exibição nos cards
+          await prisma.meeting.update({
+            where: { id: meetingId },
+            data: { emailSentAt: new Date() },
+          });
         }
       } catch (emailErr: any) {
         // Falha no e-mail não deve derrubar o job inteiro — apenas loga

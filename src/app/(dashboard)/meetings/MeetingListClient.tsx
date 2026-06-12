@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Search, User, Users, Clock, Calendar, Eye, RefreshCw, Loader2, AlertTriangle } from "lucide-react";
+import { Search, User, Users, Clock, Calendar, Eye, RefreshCw, Loader2, AlertTriangle, Mail } from "lucide-react";
 import { MeetingDrawer } from "@/components/MeetingDrawer";
 import { useSearchParams } from "next/navigation";
 
@@ -123,6 +123,7 @@ export function MeetingListClient({ initialMeetings }: { initialMeetings: any[] 
           const duration = m.durationMinutes || Math.round((new Date(m.endedAt).getTime() - new Date(m.startedAt).getTime()) / 60000);
           const hasTranscript = !!m.transcriptRaw;
           const hasMinutes = !!m.minutesText;
+          const emailSentAt: Date | null = m.emailSentAt ? new Date(m.emailSentAt) : null;
           const isError = m.status === "ERROR";
           const isAwaiting = m.status === "AWAITING_RECORDING";
           const canReprocess = isError || isAwaiting;
@@ -240,6 +241,15 @@ export function MeetingListClient({ initialMeetings }: { initialMeetings: any[] 
                         {failStageLabel[failStage]}
                       </span>
                     )}
+                    {emailSentAt && (
+                      <span
+                        title={`E-mail enviado em ${emailSentAt.toLocaleString("pt-BR")}`}
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/20 text-amber-400 border border-amber-700/30 font-mono flex items-center gap-1 cursor-help"
+                      >
+                        <Mail className="w-2.5 h-2.5 shrink-0" />
+                        E-MAIL ENVIADO
+                      </span>
+                    )}
                   </div>
 
                   {/* Botão de reprocessamento ou "VER DETALHES" */}
@@ -293,6 +303,11 @@ export function MeetingListClient({ initialMeetings }: { initialMeetings: any[] 
             setSelectedMeeting((prev: any) => ({ ...prev, status: "PENDING" }));
           }
           return data;
+        }}
+        onEmailSent={(meetingId, sentAt) => {
+          setMeetings(prev =>
+            prev.map(m => m.id === meetingId ? { ...m, emailSentAt: sentAt } : m)
+          );
         }}
       />
     </div>

@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   X, FileText, AudioLines, Info, Calendar, Clock, Users, User,
   Link as LinkIcon, Download, ChevronRight, RefreshCw, Loader2,
-  AlertTriangle, Terminal, Brain, Tag, Pencil, Save, RotateCcw, Plus, Trash2
+  AlertTriangle, Terminal, Brain, Tag, Pencil, Save, RotateCcw, Plus, Trash2, Mail, SendHorizonal, CheckCircle2
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -13,6 +13,7 @@ interface MeetingDrawerProps {
   meeting: any | null;
   onClose: () => void;
   onReprocess?: (meeting: any) => Promise<any>;
+  onEmailSent?: (meetingId: string, sentAt: Date) => void;
 }
 
 interface FailureLog {
@@ -29,10 +30,10 @@ interface KnowledgeNode {
   tags: { tag: { id: string; name: string; color: string } }[];
 }
 
-type TabId = "transcricao" | "ata" | "memory" | "info" | "falhas";
+type TabId = "transcricao" | "ata" | "memory" | "info" | "falhas" | "email";
 type ReprocessLevel = "TRANSCRIPTION" | "ATA" | "MEMORY_BRAIN";
 
-export function MeetingDrawer({ meeting, onClose, onReprocess }: MeetingDrawerProps) {
+export function MeetingDrawer({ meeting, onClose, onReprocess, onEmailSent }: MeetingDrawerProps) {
   const [activeTab, setActiveTab] = useState<TabId>("transcricao");
   const [failureLogs, setFailureLogs] = useState<FailureLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
@@ -49,6 +50,12 @@ export function MeetingDrawer({ meeting, onClose, onReprocess }: MeetingDrawerPr
   const [editKeywords, setEditKeywords] = useState<string[]>([]);
   const [newKeyword, setNewKeyword] = useState("");
   const [savingMemory, setSavingMemory] = useState(false);
+
+  // E-mail state
+  const [emailLogs, setEmailLogs] = useState<FailureLog[]>([]);
+  const [emailLogsLoading, setEmailLogsLoading] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [emailFeedback, setEmailFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
 
   // ── Carrega logs de falha ──────────────────────────────────────────────────
   useEffect(() => {
@@ -96,7 +103,43 @@ export function MeetingDrawer({ meeting, onClose, onReprocess }: MeetingDrawerPr
 
   useEffect(() => {
     if (activeTab === "memory") loadMemoryNode();
+    if (activeTab === "email") loadEmailLogs();
   }, [activeTab, loadMemoryNode]);
+
+  // ── Carrega histórico de e-mails ──────────────────────────────────────────
+  const loadEmailLogs = async () => {
+    if (!meeting?.id) return;
+    setEmailLogsLoading(true);
+    try {
+      const res = await fetch(`/api/meetings/${meeting.id}/send-email`);
+      const data = await res.json();
+      setEmailLogs(data.logs || []);
+    } catch { setEmailLogs([]); }
+    finally { setEmailLogsLoading(false); }
+  };
+
+  // ── Reenvio manual de e-mail ───────────────────────────────────────────────
+  const handleSendEmail = async () => {
+    setSendingEmail(true);
+    setEmailFeedback(null);
+    try {
+      const res = await fetch(`/api/meetings/${meeting.id}/send-email`, { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        const sentAt = new Date();
+        setEmailFeedback({ ok: true, msg: `E-mail enviado para ${data.count} destinatário(s)!` });
+        setTimeout(loadEmailLogs, 1000);
+        onEmailSent?.(meeting.id, sentAt);
+      } else {
+        setEmailFeedback({ ok: false, msg: data.error || "Erro ao enviar." });
+      }
+    } catch {
+      setEmailFeedback({ ok: false, msg: "Erro de conexão." });
+    } finally {
+      setSendingEmail(false);
+      setTimeout(() => setEmailFeedback(null), 6000);
+    }
+  };
 
   if (!meeting) return null;
 
@@ -293,6 +336,7 @@ export function MeetingDrawer({ meeting, onClose, onReprocess }: MeetingDrawerPr
           {tabBtn("ata", "Ata Inteligente", <FileText className="w-4 h-4" />, hasMinutes ? "bg-purple-500" : undefined)}
           {tabBtn("memory", "Memory Brain", <Brain className="w-4 h-4" />)}
           {tabBtn("info", "Metadados", <Info className="w-4 h-4" />)}
+          {tabBtn("email", "E-mail", <Mail className="w-4 h-4" />, emailLogs.length > 0 ? "bg-amber-500" : undefined)}
           {tabBtn("falhas", "Logs de Falha", <Terminal className="w-4 h-4" />, undefined, failureLogs.length)}
         </div>
 
@@ -712,6 +756,95 @@ export function MeetingDrawer({ meeting, onClose, onReprocess }: MeetingDrawerPr
             </div>
           )}
 
+          {/* ── TAB 6: E-MAIL ── */}
+          {activeTab === "email" && (
+            <div className="p-5 animate-in fade-in slide-in-from-bottom-2 duration-200 space-y-5">
+
+              {/* Ação de reenvio */}
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
+                  <Mail className="w-4 h-4 text-amber-400" />
+                  Histórico de E-mails
+                </h3>
+                <button
+                  onClick={handleSendEmail}
+                  disabled={sendingEmail || !hasMinutes}
+                  title={!hasMinutes ? "Gere a ata antes de enviar" : "Enviar e-mail agora"}
+                  className="flex items-center gap-2 px-4 py-2 text-xs font-mono font-bold rounded-md border transition-all
+                    bg-amber-500/10 border-amber-500/40 text-amber-400 hover:bg-amber-500/20 hover:border-amber-400
+                    disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {sendingEmail
+                    ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Enviando...</>
+                    : <><SendHorizonal className="w-3.5 h-3.5" /> Reenviar E-mail</>}
+                </button>
+              </div>
+
+              {/* Feedback */}
+              {emailFeedback && (
+                <div className={`flex items-center gap-2 p-3 rounded-md border text-sm animate-in fade-in duration-200 ${
+                  emailFeedback.ok
+                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                    : "bg-red-500/10 border-red-500/30 text-red-400"
+                }`}>
+                  {emailFeedback.ok
+                    ? <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    : <AlertTriangle className="w-4 h-4 shrink-0" />}
+                  {emailFeedback.msg}
+                </div>
+              )}
+
+              {/* Aviso sem ata */}
+              {!hasMinutes && (
+                <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-4 text-zinc-500 text-sm flex items-center gap-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-500/50 shrink-0" />
+                  Esta reunião ainda não tem ata gerada. Gere a ata primeiro para poder enviar o e-mail.
+                </div>
+              )}
+
+              {/* Histórico */}
+              {emailLogsLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-6 h-6 text-zinc-600 animate-spin" />
+                </div>
+              ) : emailLogs.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-zinc-600 gap-2">
+                  <Mail className="w-12 h-12 opacity-10" />
+                  <p className="text-sm font-mono">Nenhum e-mail enviado para esta reunião ainda.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {emailLogs.map((log) => {
+                    const isOk = log.level === "INFO";
+                    return (
+                      <div key={log.id} className={`rounded-xl border p-4 text-xs space-y-2 ${
+                        isOk ? "bg-emerald-950/20 border-emerald-900/30" : "bg-red-950/20 border-red-900/40"
+                      }`}>
+                        <div className="flex items-center gap-2">
+                          {isOk
+                            ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                            : <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />}
+                          <span className={`font-bold text-[10px] uppercase px-1.5 py-0.5 rounded ${
+                            isOk ? "bg-emerald-900/50 text-emerald-400" : "bg-red-900/50 text-red-400"
+                          }`}>{isOk ? "ENVIADO" : "FALHOU"}</span>
+                          <span className="text-zinc-500 font-mono text-[10px]">{new Date(log.createdAt).toLocaleString("pt-BR")}</span>
+                          <span className={`ml-auto text-[10px] font-mono px-1.5 py-0.5 rounded border ${
+                            log.level === "INFO" && (log.message as string).includes("manual")
+                              ? "bg-zinc-800 border-zinc-700 text-zinc-400"
+                              : "bg-amber-900/20 border-amber-700/30 text-amber-400"
+                          }`}>
+                            {(log.message as string).includes("manual") ? "manual" : "automático"}
+                          </span>
+                        </div>
+                        <p className="font-mono text-[11px] text-zinc-400 leading-relaxed pl-5">{log.message}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
         </div>
 
         {/* Footer */}
@@ -739,6 +872,12 @@ export function MeetingDrawer({ meeting, onClose, onReprocess }: MeetingDrawerPr
               <span className="text-xs text-red-400 flex items-center gap-1">
                 <AlertTriangle className="w-3 h-3" />
                 Falha no processamento
+              </span>
+            )}
+            {emailLogs.length > 0 && (
+              <span className="text-xs text-amber-400 flex items-center gap-1 ml-3">
+                <Mail className="w-3 h-3" />
+                {emailLogs.filter(l => l.level === "INFO").length} e-mail(s) enviado(s)
               </span>
             )}
           </div>

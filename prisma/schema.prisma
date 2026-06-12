@@ -41,6 +41,7 @@ model Meeting {
   
   transcriptRaw   String?
   minutesText     String?
+  emailSentAt     DateTime? // Última vez que um e-mail foi enviado com sucesso
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
