@@ -114,9 +114,9 @@ function extractAudio(videoPath: string, audioPath: string): Promise<void> {
 }
 
 // ── Helper: diarização com Python (Whisper + Pyannote) ───────────────────────
-function runDiarization(audioPath: string, hfToken: string): Promise<string> {
+function runDiarization(audioPath: string, hfToken: string, meetingSubject: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const py = spawn("/opt/venv/bin/python3", ["/app/src/python/diarize.py", audioPath, hfToken], {
+    const py = spawn("/opt/venv/bin/python3", ["/app/src/python/diarize.py", audioPath, hfToken, meetingSubject], {
       env: { 
         ...process.env, 
         PYTHONIOENCODING: "utf-8",
@@ -486,7 +486,7 @@ async function startWorker() {
         // 🛡️ Marca como TRANSCRIBING para que o recovery detecte crash nesta etapa
         await prisma.meeting.update({ where: { id: meetingId }, data: { status: "TRANSCRIBING" } });
         console.log(`[Worker] Diarização em andamento (Whisper + Pyannote)...`);
-        transcriptRaw = await runDiarization(audioPath, hfToken);
+        transcriptRaw = await runDiarization(audioPath, hfToken, meeting.subject || "Reunião corporativa");
         await job.updateProgress(78);
         console.log(`[Worker] Diarização concluída: ${transcriptRaw.split("\n").length} segmentos.`);
 
@@ -564,6 +564,59 @@ ${transcriptRaw}`;
       } else {
         console.log(`[Worker] Ata já existe para "${meeting.subject}". Pulando geração de texto (Smart Retry).`);
         await job.updateProgress(88);
+      }
+
+      // ── 8. Envio Automático de E-mail (se habilitado) ───────────────────────
+      try {
+        const emailSys = await prisma.systemSettings.findUnique({ where: { id: "global" } });
+        if (emailSys?.ruleAutoSend && emailSys?.emailFromAddress) {
+          console.log(`[Worker] Envio automático habilitado. Preparando e-mail...`);
+
+          const participantEmails: string[] = (() => {
+            try { return JSON.parse(meeting.participants || "[]"); } catch { return []; }
+          })();
+
+          const organizer = { email: meeting.organizerEmail, name: meeting.organizerName || meeting.organizerEmail };
+          const participants = participantEmails.map(e => ({ email: e, name: e.split("@")[0] }));
+
+          const emailBody = (emailSys.emailBodyPrompt || "{{ATA}}")
+            .replace(/\{\{ATA\}\}/g, finalMinutes || "")
+            .replace(/\{\{TRANSCRICAO\}\}/g, transcriptRaw || "")
+            .replace(/\{\{TITULO\}\}/g, meeting.subject)
+            .replace(/\{\{ORGANIZADOR\}\}/g, meeting.organizerName || meeting.organizerEmail)
+            .replace(/\{\{DATA\}\}/g, meeting.startedAt.toLocaleDateString("pt-BR"))
+            .replace(/\{\{PARTICIPANTES\}\}/g, participantEmails.join(", "));
+
+          const emailSubject = (emailSys.emailSubjectPrompt || "[Ata] {{TITULO}}")
+            .replace(/\{\{TITULO\}\}/g, meeting.subject);
+
+          const distributionRules = {
+            sendToOrganizerOnly: emailSys.ruleRestrictToOrgs,
+            blockExternalGuests: emailSys.ruleBlockExternal,
+            internalDomain: "@" + (emailSys.emailFromAddress.split("@")[1] || ""),
+            bccAuditEmail: (() => {
+              try { const arr = JSON.parse(emailSys.ruleBccEmails); return arr[0] || undefined; } catch { return undefined; }
+            })(),
+          };
+
+          const graphClientForEmail = await getGraphClient();
+          const { sendMinutesViaGraph } = await import("../lib/distribution/mailer");
+          await sendMinutesViaGraph(
+            graphClientForEmail,
+            organizer,
+            participants,
+            emailBody,
+            emailSubject,
+            distributionRules,
+            emailSys.emailFromAddress
+          );
+          console.log(`[Worker] E-mail enviado com sucesso para ${participants.length + 1} destinatários.`);
+          await logAudit("INFO", `E-mail automático enviado para reunião "${meeting.subject}".`, meetingId);
+        }
+      } catch (emailErr: any) {
+        // Falha no e-mail não deve derrubar o job inteiro — apenas loga
+        console.error(`[Worker] Falha no envio de e-mail automático:`, emailErr.message);
+        await logAudit("WARNING", `Falha no envio de e-mail para "${meeting.subject}": ${emailErr.message}`, meetingId);
       }
 
       await job.updateProgress(92);

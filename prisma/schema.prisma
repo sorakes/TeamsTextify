@@ -102,6 +102,11 @@ model SystemSettings {
   huggingFaceToken       String?                 // Token para o Pyannote (Speaker Diarization)
   syncIntervalMinutes    Int?                    // Intervalo em minutos para varredura automática (null = desativado)
 
+  // ── Configurações de E-mail de Saída ──────────────────────────────────────
+  emailFromAddress       String?                 // Remetente (ex: noreply@empresa.com)
+  emailSubjectPrompt     String?                 // Template do assunto (suporta {{TITULO}})
+  emailBodyPrompt        String?                 // Template do corpo em Markdown com variáveis
+
   updatedAt          DateTime @updatedAt
 }
 

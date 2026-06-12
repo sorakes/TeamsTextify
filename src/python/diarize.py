@@ -11,6 +11,7 @@ def main():
 
     audio_path = sys.argv[1]
     hf_token = sys.argv[2] if len(sys.argv) > 2 else None
+    meeting_subject = sys.argv[3] if len(sys.argv) > 3 else "Reunião corporativa"
 
     # Detect device
     device_name = "cuda" if torch.cuda.is_available() else "cpu"
@@ -19,7 +20,23 @@ def main():
     try:
         # Load Faster-Whisper model ('large-v3-turbo' é ultra-rápido, consome ~3GB VRAM e entende gírias perfeitamente)
         model = WhisperModel("large-v3-turbo", device=device_name, compute_type=compute_type)
-        segments_gen, _ = model.transcribe(audio_path, language="pt", word_timestamps=True)
+
+        # Prompt inicial dinâmico: orienta o Whisper ao contexto corporativo e ao título da reunião
+        initial_prompt = (
+            f"Transcrição de reunião corporativa em português brasileiro. "
+            f"Reunião sobre: {meeting_subject}. "
+            f"Vocabulário técnico e de negócios esperado."
+        )
+
+        segments_gen, _ = model.transcribe(
+            audio_path,
+            language="pt",
+            word_timestamps=True,
+            beam_size=5,
+            vad_filter=True,                              # Ignora silêncio, evita alucinações
+            vad_parameters={"min_silence_duration_ms": 500},
+            initial_prompt=initial_prompt,
+        )
         
         segments = list(segments_gen)
         

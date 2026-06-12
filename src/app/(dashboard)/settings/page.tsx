@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Save, BrainCircuit, Loader2, CheckCircle2, AlertCircle, KeyRound, Link as LinkIcon, Cpu, RefreshCw, Power, Key } from "lucide-react";
+import { Save, BrainCircuit, Loader2, CheckCircle2, AlertCircle, KeyRound, Link as LinkIcon, Cpu, RefreshCw, Power, Key, Mail, ToggleLeft, ToggleRight, Copy } from "lucide-react";
 
 type ProviderType = "openai" | "gemini" | "groq" | "openrouter" | "ollama";
 
@@ -28,6 +28,16 @@ export default function SettingsPage() {
   const [huggingFaceToken, setHuggingFaceToken] = useState("");
   const [savingSystem, setSavingSystem] = useState(false);
 
+  // ── E-mail de Saída ───────────────────────────────────────────────────────
+  const [emailFromAddress, setEmailFromAddress] = useState("");
+  const [emailSubjectPrompt, setEmailSubjectPrompt] = useState("[Ata Automática] {{TITULO}}");
+  const [emailBodyPrompt, setEmailBodyPrompt] = useState("{{ATA}}");
+  const [ruleAutoSend, setRuleAutoSend] = useState(false);
+  const [savingEmail, setSavingEmail] = useState(false);
+  const [emailSaveStatus, setEmailSaveStatus] = useState<"success" | "error" | null>(null);
+  const [emailErrorMsg, setEmailErrorMsg] = useState("");
+  const [copiedVar, setCopiedVar] = useState<string | null>(null);
+
   useEffect(() => {
     fetchConfig();
     fetchSystemSettings();
@@ -40,10 +50,46 @@ export default function SettingsPage() {
       if (data.success && data.settings) {
         setWorkerConcurrency(data.settings.workerConcurrency || 1);
         setHuggingFaceToken(data.settings.huggingFaceToken || "");
+        setEmailFromAddress(data.settings.emailFromAddress || "");
+        setEmailSubjectPrompt(data.settings.emailSubjectPrompt || "[Ata Automática] {{TITULO}}");
+        setEmailBodyPrompt(data.settings.emailBodyPrompt || "{{ATA}}");
+        setRuleAutoSend(data.settings.ruleAutoSend || false);
       }
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const handleSaveEmail = async () => {
+    setSavingEmail(true);
+    setEmailSaveStatus(null);
+    setEmailErrorMsg("");
+    try {
+      const res = await fetch("/api/settings/system", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ emailFromAddress, emailSubjectPrompt, emailBodyPrompt, ruleAutoSend }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setEmailSaveStatus("success");
+        setTimeout(() => setEmailSaveStatus(null), 4000);
+      } else {
+        setEmailSaveStatus("error");
+        setEmailErrorMsg(data.error || "Falha ao salvar configurações de e-mail.");
+      }
+    } catch (e) {
+      setEmailSaveStatus("error");
+      setEmailErrorMsg("Erro de comunicação com o servidor.");
+    } finally {
+      setSavingEmail(false);
+    }
+  };
+
+  const copyVar = (variable: string) => {
+    navigator.clipboard.writeText(variable);
+    setCopiedVar(variable);
+    setTimeout(() => setCopiedVar(null), 2000);
   };
 
   const fetchConfig = async (silent = false) => {
@@ -488,6 +534,137 @@ export default function SettingsPage() {
             <div className="flex items-center gap-2 text-emerald-400 bg-emerald-400/10 p-3 rounded-md border border-emerald-400/20 text-sm mt-4">
               <CheckCircle2 className="w-4 h-4 shrink-0" />
               <span>Concorrência salva com sucesso no sistema.</span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* CARD: E-mail de Saída */}
+      <Card className="bg-zinc-950 border-zinc-800 shadow-2xl overflow-hidden relative group mt-6">
+        <div className="absolute top-0 left-0 w-1 h-full bg-amber-500" />
+        <CardHeader className="pb-4 border-b border-zinc-800/50 mb-4">
+          <div className="flex justify-between items-center">
+            <CardTitle className="text-white flex items-center gap-2">
+              <Mail className="w-5 h-5 text-amber-400" /> E-mail de Saída
+            </CardTitle>
+            {/* Toggle Envio Automático */}
+            <button
+              onClick={() => setRuleAutoSend(v => !v)}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-bold transition-all border ${
+                ruleAutoSend
+                  ? "bg-amber-500/20 border-amber-500/40 text-amber-400"
+                  : "bg-zinc-800 border-zinc-700 text-zinc-400 hover:border-zinc-500"
+              }`}
+            >
+              {ruleAutoSend
+                ? <><ToggleRight className="w-4 h-4" /> ENVIO AUTOMÁTICO: ON</>
+                : <><ToggleLeft className="w-4 h-4" /> ENVIO AUTOMÁTICO: OFF</>}
+            </button>
+          </div>
+          <CardDescription className="text-zinc-400">
+            Configure o remetente e o template do e-mail enviado automaticamente após a geração de cada ata.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+
+          {/* Variáveis Disponíveis */}
+          <div className="bg-amber-900/10 border border-amber-500/20 p-4 rounded-lg">
+            <h4 className="text-amber-400 font-semibold text-xs uppercase tracking-widest mb-3 flex items-center gap-2">
+              <Copy className="w-3 h-3" /> Variáveis disponíveis (clique para copiar)
+            </h4>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { v: "{{TITULO}}",       desc: "Título da reunião" },
+                { v: "{{ATA}}",          desc: "Ata em Markdown" },
+                { v: "{{TRANSCRICAO}}",  desc: "Transcrição bruta" },
+                { v: "{{ORGANIZADOR}}",  desc: "Nome do organizador" },
+                { v: "{{DATA}}",         desc: "Data da reunião" },
+                { v: "{{PARTICIPANTES}}",desc: "Lista de participantes" },
+              ].map(({ v, desc }) => (
+                <button
+                  key={v}
+                  onClick={() => copyVar(v)}
+                  title={desc}
+                  className={`font-mono text-xs px-2.5 py-1 rounded border transition-all ${
+                    copiedVar === v
+                      ? "bg-amber-500 border-amber-400 text-black"
+                      : "bg-zinc-900 border-zinc-700 text-amber-300 hover:border-amber-500/50 hover:bg-amber-900/20"
+                  }`}
+                >
+                  {copiedVar === v ? "✓ copiado" : v}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Campo Remetente */}
+          <div className="space-y-2">
+            <label className="text-xs font-bold font-mono text-zinc-500 uppercase tracking-widest flex items-center gap-2">
+              <Mail className="w-3 h-3" /> E-mail Remetente
+            </label>
+            <input
+              type="email"
+              value={emailFromAddress}
+              onChange={e => setEmailFromAddress(e.target.value)}
+              placeholder="noreply@suaempresa.com.br"
+              className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-amber-500 font-mono transition-all"
+            />
+            <p className="text-[10px] text-zinc-500">Deve ser uma conta do seu tenant Microsoft 365 com permissão <code className="text-amber-400/70">Mail.Send</code> no Entra ID.</p>
+          </div>
+
+          {/* Template Assunto */}
+          <div className="space-y-2">
+            <label className="text-xs font-bold font-mono text-zinc-500 uppercase tracking-widest">
+              ASSUNTO DO E-MAIL
+            </label>
+            <input
+              type="text"
+              value={emailSubjectPrompt}
+              onChange={e => setEmailSubjectPrompt(e.target.value)}
+              placeholder="[Ata Automática] {{TITULO}}"
+              className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-amber-500 font-mono transition-all"
+            />
+          </div>
+
+          {/* Template Corpo */}
+          <div className="space-y-2">
+            <label className="text-xs font-bold font-mono text-zinc-500 uppercase tracking-widest">
+              CORPO DO E-MAIL (PROMPT)
+            </label>
+            <textarea
+              value={emailBodyPrompt}
+              onChange={e => setEmailBodyPrompt(e.target.value)}
+              rows={10}
+              placeholder={`Olá,\n\nSegue a ata da reunião {{TITULO}} realizada em {{DATA}}.\n\n{{ATA}}\n\nEste e-mail foi gerado automaticamente pelo TeamsTextify.`}
+              className="w-full bg-black border border-zinc-800 rounded-md py-2.5 px-3 text-sm text-zinc-200 focus:outline-none focus:border-amber-500 font-mono transition-all resize-y min-h-[160px]"
+            />
+            <p className="text-[10px] text-zinc-500">Suporta Markdown. Use as variáveis acima para incluir conteúdo dinâmico da reunião.</p>
+          </div>
+
+          {/* Botão Salvar */}
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={handleSaveEmail}
+              disabled={savingEmail}
+              className="flex justify-center items-center px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-md text-sm transition-colors border border-zinc-700 shadow-lg font-medium disabled:opacity-50"
+            >
+              {savingEmail
+                ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Salvando...</>
+                : <><Save className="w-4 h-4 mr-2" /> Salvar Configurações de E-mail</>}
+            </button>
+          </div>
+
+          {/* Feedback */}
+          {emailSaveStatus === "error" && (
+            <div className="flex items-center gap-2 text-red-400 bg-red-400/10 p-3 rounded-md border border-red-400/20 text-sm">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{emailErrorMsg}</span>
+            </div>
+          )}
+          {emailSaveStatus === "success" && (
+            <div className="flex items-center gap-2 text-emerald-400 bg-emerald-400/10 p-3 rounded-md border border-emerald-400/20 text-sm">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>Configurações de e-mail salvas com sucesso.</span>
             </div>
           )}
         </CardContent>
