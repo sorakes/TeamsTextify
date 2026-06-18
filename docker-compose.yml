@@ -1,28 +1,17 @@
 version: '3.8'
 
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: teamstextify-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-
   app:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: teamstextify-app
     ports:
-      - "3000:3000"
+      - "3075:3000"
     environment:
-      - REDIS_HOST=redis
+      - REDIS_HOST=127.0.0.1
       - REDIS_PORT=6379
       - NODE_ENV=production
-    depends_on:
-      - redis
     volumes:
       - ./prisma:/app/prisma
     restart: unless-stopped
@@ -33,6 +22,3 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-
-volumes:
-  redis_data:

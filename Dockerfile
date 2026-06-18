@@ -47,8 +47,13 @@ RUN npm run build
 # Copy Supervisord configuration
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
+# Copy and setup auto-healing entrypoint
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 # Expose Next.js port
 EXPOSE 3000
 
-# Start supervisord as the main process
+# Start supervisord as the main process via entrypoint
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
